@@ -12,8 +12,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/happycrud/crud/internal/model"
-	"github.com/happycrud/crud/internal/tag"
+	"github.com/goflower-io/crud/internal/model"
+	"github.com/goflower-io/crud/internal/tag"
 )
 
 //go:embed "internal/templates/proto.tmpl"
@@ -47,10 +47,20 @@ var (
 const defaultDir = "crud"
 
 func init() {
-	flag.BoolVar(&service, "service", false, "-service  generate GRPC proto message and service implementation")
+	flag.BoolVar(
+		&service,
+		"service",
+		false,
+		"-service  generate GRPC proto message and service implementation",
+	)
 	flag.BoolVar(&http, "http", false, "-http  generate http handler and templ view")
 	flag.StringVar(&protopkg, "protopkg", "", "-protopkg  proto package field value")
-	flag.StringVar(&dialect, "dialect", "mysql", "-dialect only support mysql postgres sqlite3, default mysql ")
+	flag.StringVar(
+		&dialect,
+		"dialect",
+		"mysql",
+		"-dialect only support mysql postgres sqlite3, default mysql ",
+	)
 }
 
 func main() {
@@ -90,7 +100,12 @@ func main() {
 		generateFiles(v)
 	}
 	if isDir && path == defaultDir {
-		generateFile(filepath.Join(defaultDir, "aa_client.go"), string(clientGenericTmpl), f, tableObjs)
+		generateFile(
+			filepath.Join(defaultDir, "aa_client.go"),
+			string(clientGenericTmpl),
+			f,
+			tableObjs,
+		)
 	}
 }
 
@@ -110,17 +125,32 @@ func tableFromSql(path string) (tableObjs []*model.Table, isDir bool) {
 			if !v.IsDir() && strings.HasSuffix(strings.ToLower(v.Name()), ".sql") {
 				switch dialect {
 				case "mysql":
-					obj := model.MysqlTable(database, filepath.Join(path, v.Name()), relativePath, dialect)
+					obj := model.MysqlTable(
+						database,
+						filepath.Join(path, v.Name()),
+						relativePath,
+						dialect,
+					)
 					if obj != nil {
 						tableObjs = append(tableObjs, obj)
 					}
 				case "postgres":
-					obj := model.PostgresTable(database, filepath.Join(path, v.Name()), relativePath, dialect)
+					obj := model.PostgresTable(
+						database,
+						filepath.Join(path, v.Name()),
+						relativePath,
+						dialect,
+					)
 					if obj != nil {
 						tableObjs = append(tableObjs, obj)
 					}
 				case "sqlite3":
-					obj := model.Sqlite3Table(database, filepath.Join(path, v.Name()), relativePath, dialect)
+					obj := model.Sqlite3Table(
+						database,
+						filepath.Join(path, v.Name()),
+						relativePath,
+						dialect,
+					)
 					if obj != nil {
 						tableObjs = append(tableObjs, obj)
 					}
@@ -179,7 +209,13 @@ func generateService(tableObj *model.Table) {
 
 	// proto-go  grpc
 	var cmd *exec.Cmd
-	cmd = exec.Command("protoc", "-I.", "--go_out=.", "--go-grpc_out=.", filepath.Join("proto", pkgName+".api.proto"))
+	cmd = exec.Command(
+		"protoc",
+		"-I.",
+		"--go_out=.",
+		"--go-grpc_out=.",
+		filepath.Join("proto", pkgName+".api.proto"),
+	)
 
 	cmd.Dir = filepath.Join(model.GetCurrentPath())
 	log.Println(cmd.Dir, "exec:", cmd.String())

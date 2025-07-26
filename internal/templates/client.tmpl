@@ -5,7 +5,7 @@ import (
 	"database/sql"
 
 	
-	"github.com/happycrud/xsql"
+	"github.com/goflower-io/xsql"
 
 	{{- range $index,$table := . }}
    	"{{$table.RelativePath}}/crud/{{$table.PackageName}}"
@@ -15,9 +15,9 @@ import (
 	 {{$ispg :=  eq (index . 0).Dialect "postgres"}}
 	 {{$issqlite :=  eq (index . 0).Dialect "sqlite3"}}
 
-	 {{if $ismysql}}"github.com/happycrud/xsql/mysql"{{end}} 
-	 {{if $ispg}}"github.com/happycrud/xsql/postgres"{{end}} 
-	 {{if $issqlite}}"github.com/happycrud/xsql/sqlite3"{{end}}
+	 {{if $ismysql}}"github.com/goflower-io/xsql/mysql"{{end}} 
+	 {{if $ispg}}"github.com/goflower-io/xsql/postgres"{{end}} 
+	 {{if $issqlite}}"github.com/goflower-io/xsql/sqlite3"{{end}}
 
 )
 	

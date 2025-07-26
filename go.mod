@@ -1,4 +1,4 @@
-module github.com/happycrud/crud
+module github.com/goflower-io/crud
 
 go 1.22.3
 
