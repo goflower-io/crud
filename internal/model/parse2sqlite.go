@@ -102,7 +102,7 @@ func Sqlite3Column(ddl *sql.CreateTableStatement, annotations map[string]*Column
 		}
 
 		c.GoColumnName = GoCamelCase(c.ColumnName)
-		c.GoColumnType, c.BigType = Sqlite3ToGoFieldType(c.DataType, c.ColumnType)
+		c.GoColumnType, c.BigType = Sqlite3ToGoFieldType(c.DataType)
 		if strings.Contains(c.GoColumnType, "int") {
 			c.GoColumnType = "int64"
 		}
@@ -134,7 +134,7 @@ func Sqlite3Column(ddl *sql.CreateTableStatement, annotations map[string]*Column
 	return res, nil
 }
 
-func Sqlite3ToGoFieldType(dt, ct string) (string, int) {
+func Sqlite3ToGoFieldType(dt string) (string, int) {
 	var typ string
 	var gtp int
 	switch strings.ToLower(dt) {

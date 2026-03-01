@@ -6,7 +6,6 @@ import (
 	"go/parser"
 	"go/token"
 	"log"
-	"reflect"
 	"strings"
 )
 
@@ -62,26 +61,17 @@ func ParseStruct(filePath, structName string) *PbMessage {
 }
 
 func GetGoType(exp ast.Expr) string {
-	var gotype string
-	switch reflect.TypeOf(exp) {
-	case reflect.TypeOf(&ast.SelectorExpr{}):
-		vv := exp.(*ast.SelectorExpr)
+	switch vv := exp.(type) {
+	case *ast.SelectorExpr:
 		pkg := vv.X.(*ast.Ident)
-		gotype = pkg.String() + "." + vv.Sel.String()
-	case reflect.TypeOf(&ast.Ident{}):
-		vv := exp.(*ast.Ident)
-		gotype = vv.String()
-	case reflect.TypeOf(&ast.ArrayType{}):
-		vv := exp.(*ast.ArrayType)
-		gotype = "[]" + GetGoType(vv.Elt)
-
-	case reflect.TypeOf(&ast.MapType{}):
-		vv := exp.(*ast.MapType)
-		key := GetGoType(vv.Key)
-		value := GetGoType(vv.Value)
-		gotype = fmt.Sprintf("map[%s]%s", key, value)
+		return pkg.String() + "." + vv.Sel.String()
+	case *ast.Ident:
+		return vv.String()
+	case *ast.ArrayType:
+		return "[]" + GetGoType(vv.Elt)
+	case *ast.MapType:
+		return fmt.Sprintf("map[%s]%s", GetGoType(vv.Key), GetGoType(vv.Value))
 	default:
 		panic("not support embed field or include other struct ")
 	}
-	return gotype
 }

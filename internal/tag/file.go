@@ -65,10 +65,10 @@ func ParseFile(inputPath string, src interface{}, xxxSkip []string) (areas []tex
 		builder := strings.Builder{}
 		if len(xxxSkip) > 0 {
 			for i, skip := range xxxSkip {
-				builder.WriteString(fmt.Sprintf("%s:\"-\"", skip))
 				if i > 0 {
 					builder.WriteString(",")
 				}
+				builder.WriteString(fmt.Sprintf("%s:\"-\"", skip))
 			}
 		}
 

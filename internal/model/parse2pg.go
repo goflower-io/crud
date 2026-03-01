@@ -116,7 +116,7 @@ func PostgresColumn(ddl *pg_query.CreateStmt, annotations map[string]*ColumnAnno
 			c.IsPostgresArray = true
 		}
 		c.GoColumnName = GoCamelCase(c.ColumnName)
-		c.GoColumnType, c.BigType = PostgresToGoFieldType(c.DataType, c.ColumnType, arrayDime)
+		c.GoColumnType, c.BigType = PostgresToGoFieldType(c.DataType, arrayDime)
 		if strings.Contains(c.GoColumnType, "int") && !strings.Contains(c.GoColumnType, "[]") {
 			c.GoColumnType = "int64"
 		}
@@ -147,11 +147,7 @@ func PostgresColumn(ddl *pg_query.CreateStmt, annotations map[string]*ColumnAnno
 	return res, nil
 }
 
-func PostgresToGoFieldType(dt, ct string, arrayDime int) (string, int) {
-	var unsigned bool
-	if strings.Contains(ct, "unsigned") {
-		unsigned = true
-	}
+func PostgresToGoFieldType(dt string, arrayDime int) (string, int) {
 	var typ string
 	var gtp int
 	switch dt {
@@ -167,27 +163,15 @@ func PostgresToGoFieldType(dt, ct string, arrayDime int) (string, int) {
 		typ = "string"
 	case "tinyint":
 		typ = "int32"
-		if unsigned {
-			typ = "uint32"
-		}
 		gtp = bigtypeCompare
 	case "smallint", "int2", "serial2", "smallserial":
 		typ = "int32"
-		if unsigned {
-			typ = "uint32"
-		}
 		gtp = bigtypeCompare
 	case "int4", "int", "integer", "serial4", "serial":
 		typ = "int32"
-		if unsigned {
-			typ = "uint32"
-		}
 		gtp = bigtypeCompare
 	case "bigint", "int8", "bigserial", "bigserial8":
 		typ = "int64"
-		if unsigned {
-			typ = "uint64"
-		}
 		gtp = bigtypeCompare
 	case "float", "real":
 		typ = "float32"

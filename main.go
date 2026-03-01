@@ -47,6 +47,8 @@ var (
 const defaultDir = "crud"
 
 func init() {
+	flag.StringVar(&database, "database", "", "-database  target database name")
+	flag.StringVar(&path, "path", "", "-path  path to SQL file or directory (default: ./crud)")
 	flag.BoolVar(
 		&service,
 		"service",
@@ -109,6 +111,18 @@ func main() {
 	}
 }
 
+func tableFromSqlFile(filePath, db, relative, d string) *model.Table {
+	switch d {
+	case "mysql":
+		return model.MysqlTable(db, filePath, relative, d)
+	case "postgres":
+		return model.PostgresTable(db, filePath, relative, d)
+	case "sqlite3":
+		return model.Sqlite3Table(db, filePath, relative, d)
+	}
+	return nil
+}
+
 func tableFromSql(path string) (tableObjs []*model.Table, isDir bool) {
 	relativePath := model.GetRelativePath()
 	info, err := os.Stat(path)
@@ -123,59 +137,14 @@ func tableFromSql(path string) (tableObjs []*model.Table, isDir bool) {
 		}
 		for _, v := range fs {
 			if !v.IsDir() && strings.HasSuffix(strings.ToLower(v.Name()), ".sql") {
-				switch dialect {
-				case "mysql":
-					obj := model.MysqlTable(
-						database,
-						filepath.Join(path, v.Name()),
-						relativePath,
-						dialect,
-					)
-					if obj != nil {
-						tableObjs = append(tableObjs, obj)
-					}
-				case "postgres":
-					obj := model.PostgresTable(
-						database,
-						filepath.Join(path, v.Name()),
-						relativePath,
-						dialect,
-					)
-					if obj != nil {
-						tableObjs = append(tableObjs, obj)
-					}
-				case "sqlite3":
-					obj := model.Sqlite3Table(
-						database,
-						filepath.Join(path, v.Name()),
-						relativePath,
-						dialect,
-					)
-					if obj != nil {
-						tableObjs = append(tableObjs, obj)
-					}
-
+				if obj := tableFromSqlFile(filepath.Join(path, v.Name()), database, relativePath, dialect); obj != nil {
+					tableObjs = append(tableObjs, obj)
 				}
 			}
 		}
 	} else {
-		switch dialect {
-		case "mysql":
-			obj := model.MysqlTable(database, path, relativePath, dialect)
-			if obj != nil {
-				tableObjs = append(tableObjs, obj)
-			}
-		case "postgres":
-			obj := model.PostgresTable(database, path, relativePath, dialect)
-			if obj != nil {
-				tableObjs = append(tableObjs, obj)
-			}
-		case "sqlite3":
-			obj := model.Sqlite3Table(database, path, relativePath, dialect)
-			if obj != nil {
-				tableObjs = append(tableObjs, obj)
-			}
-
+		if obj := tableFromSqlFile(path, database, relativePath, dialect); obj != nil {
+			tableObjs = append(tableObjs, obj)
 		}
 	}
 	return tableObjs, isDir
@@ -261,6 +230,8 @@ func generateFile(filename, tmpl string, f template.FuncMap, data interface{}) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	file.Write(result)
-	file.Close()
+	defer file.Close()
+	if _, err = file.Write(result); err != nil {
+		log.Fatalln(err)
+	}
 }
