@@ -1,764 +1,529 @@
+# crud — Go 语言 ORM 代码生成工具
 
-# crud is a crud code generate tool support mysql,mariadb,postgresql,sqlite3,monogdb
+**设计好表结构，剩下的交给 crud。** 从 SQL DDL 自动生成类型安全、高性能的 CRUD 代码，支持 MySQL、MariaDB、PostgreSQL 和 SQLite3。
 
+> 灵感来自 [facebook/ent](https://github.com/ent/ent)
 
+[English](README.md) | [示例代码](https://github.com/goflower-io/example) | [xsql](https://github.com/goflower-io/xsql) | [golib](https://github.com/goflower-io/golib)
 
-## 概览
+---
 
-crud 是一个非常易学好用的ORM框架，使用crud可以让你快速，优雅，且高性能的实现业务需求。目前支持mysql,mariadb,postgresql,sqlite3,monogdb。
+## 为什么选择 crud？
 
-- 从SQL DDL表结构设计到对应的Model，Service生成，符合先建表再写代码的流程
-- 支持事务,row-level locking 、FOR UPDATE 、LOCK IN SHARE MODE
-- 优雅的API，无需丑陋的硬编码，以及sql片段，全静态方法调用，IDE自动提示
-- 支持批量插入、Upsert、自增id自动赋值到结构体
-- 支持Context
-- 高性能，在查询表中所有字段时候，不使用反射创建对象，性能和原生一致
-- 查询支持 ForceIndex
-- 查询支持 灵活得设置查询条件
-- 查询支持 GROUP BY、HAVING 
-- 查询支持 查询结果Scan到自定义结构体（使用反射）
-- 服务端代码标准化
-- 表结构变更可以记录在仓库中
-- 支持根据SQL DDL表结构定义文件生成包含GRPC接口定义的proto文件 和 Service半实现代码
+| 特性 | 说明 |
+|---|---|
+| 先建表后写代码 | 写好 DDL，执行 `crud`，立刻获得可投入生产的 Go 代码 |
+| 热路径零反射 | 查询全部字段时不使用反射，性能与手写 SQL 相当 |
+| IDE 友好的 API | 完整自动补全，查询条件无需硬编码字符串 |
+| 开箱即用 | 事务、行级锁（`FOR UPDATE`、`LOCK IN SHARE MODE`）、Upsert、批量插入 |
+| gRPC 就绪 | 一个参数即可生成遵循 Google API 设计规范的 `.proto` 文件和服务骨架 |
+| 读写分离 | 通过 [xsql](https://github.com/goflower-io/xsql) 内置主从路由，读请求轮询负载均衡 |
 
-## [example](https://github.com/goflower-io/crud-example)
-## [mysql,postgresql,sqlite3 examples](./example)
-## 开始
+---
 
-### 安装
-
-```bash
-
-go install  github.com/goflower-io/crud@main
+## 生态系统
 
 ```
-### 使用命令行
-
-```bash
-Usage of crud:
-  -dialect string
-    	-dialete only support mysql postgres sqlite3, default mysql  (default "mysql")
-  -protopkg string
-    	-protopkg  proto package field value
-  -service
-    	-service  generate GRPC proto message and service implementation
+┌─────────────────────────────────────────────────────┐
+│                      example                         │
+│   （MySQL / PostgreSQL / SQLite3 全栈示例）            │
+└──────────┬──────────────────────────────────────────┘
+           │ 使用
+    ┌──────▼──────┐   生成代码   ┌──────────┐
+    │    crud     │────────────▶│  你的     │
+    │  （代码生成） │             │  模型代码  │
+    └─────────────┘             └────┬─────┘
+                                     │ 运行时
+    ┌─────────────┐  DB 客户端  ┌────▼──────┐
+    │    xsql     │◀────────────│  生成的    │
+    │（SQL 构建器）│             │   代码     │
+    └─────────────┘             └────┬───────┘
+                                     │ 由...提供服务
+    ┌─────────────┐                  │
+    │    golib    │◀─────────────────┘
+    │（HTTP/gRPC）│
+    └─────────────┘
 ```
 
-```mysql example
-在项目下创建crud目录
+---
+
+## 快速开始
+
+### 1. 安装
+
+```bash
+go install github.com/goflower-io/crud@main
+```
+
+### 2. 编写 SQL DDL
+
+```sql
+-- crud/sql/user.sql
+CREATE TABLE `user` (
+  `id`    int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'id',
+  `name`  varchar(100)     NOT NULL COMMENT '名称|text|validate:"max=100,min=10"',
+  `age`   int(11)          NOT NULL DEFAULT '0'  COMMENT '年龄|number|validate:"max=140,min=18"',
+  `sex`   int(11)          NOT NULL DEFAULT '2'  COMMENT '性别|select|validate:"oneof=0 1 2"|0:女 1:男 2:无',
+  `ctime` datetime         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `mtime` datetime         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `ix_name`  (`name`)  USING BTREE,
+  KEY `ix_mtime` (`mtime`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3. 生成代码
+
+```bash
+# 在项目根目录初始化 crud 目录
 crud init
 
-在crud目录放入user.sql
+# 将 user.sql 放入 crud/sql/ 后生成 CRUD Model
+crud
 
-# 根据表结构 生成针对该表的增删改查GRPC接口的proto文件以及 Service半实现代码
-crud -service -protopkg example
-
+# 同时生成 gRPC proto 文件和服务骨架
+crud -service -protopkg mypkg
 ```
 
-## 初始化
-
-
-### 初始化db
-```go
-db, _ = sql.Open("mysql","user:pwd@tcp(127.0.0.1:3306)/example?timeout=1s&readTimeout=1s&writeTimeout=1s&parseTime=true&loc=Local&charset=utf8mb4,utf8")
+生成结果：
 
 ```
+myproject/
+├── crud/
+│   ├── aa_client.go          # 带读写分离的 DB 客户端
+│   ├── sql/user.sql
+│   └── user/
+│       └── user.go           # 生成的 Model + 全部 CRUD 操作
+├── proto/
+│   └── user.api.proto        # gRPC 服务定义
+├── api/
+│   ├── user.api.pb.go
+│   └── user.api_grpc.pb.go
+└── service/
+    └── user.service.go       # gRPC 服务骨架（补充参数校验即可）
+```
 
-### 或者使用curd包装的client, 拥有读写分离，Context读写超时配置功能
+---
+
+## 生成代码速览
+
+`crud/user/user.go` 包含 Model 结构体、字段常量和类型化字段操作符：
+
 ```go
-var client *crud.Client
-
-var dsn = "root:123456@tcp(127.0.0.1:3306)/test?parseTime=true"
-
-func InitDB2() {
-	client, _ = crud.NewClient(&xsql.Config{
-		DSN:          dsn,
-		ReadDSN:      []string{dsn},
-		Active:       10,
-		Idle:         10,
-		IdleTimeout:  time.Hour,
-		QueryTimeout: time.Second,
-		ExecTimeout:  time.Second,
-	})
+type User struct {
+    Id    int64     `json:"id"`
+    Name  string    `json:"name"`
+    Age   int64     `json:"age"`
+    Sex   int64     `json:"sex"`
+    Ctime time.Time `json:"ctime"`
+    Mtime time.Time `json:"mtime"`
 }
+
+// 字段名常量
+const (
+    Id    = "id"
+    Name  = "name"
+    Age   = "age"
+    Sex   = "sex"
+    Ctime = "ctime"
+    Mtime = "mtime"
+)
+
+// 类型化字段操作符 — 用于构建 WHERE 条件
+const (
+    IdOp    = xsql.FieldOp[int64]("id")
+    NameOp  = xsql.StrFieldOp("name")
+    AgeOp   = xsql.FieldOp[int64]("age")
+    SexOp   = xsql.FieldOp[int64]("sex")
+    CtimeOp = xsql.FieldOp[string]("ctime")
+    MtimeOp = xsql.FieldOp[string]("mtime")
+)
 ```
 
-
-### 以user.sql建表文件为例
-```SQL
-CREATE TABLE `user` (
-  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'id字段',
-  `name` varchar(100) NOT NULL COMMENT '名称',
-  `age` int(11) NOT NULL DEFAULT '0' COMMENT '年龄',
-  `ctime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `mtime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `ix_name` (`name`) USING BTREE,
-  KEY `ix_mtime` (`mtime`) USING BTREE
-) ENGINE=InnoDB  DEFAULT CHARSET=utf8mb4
-```
-
-```bash
-# 在example执行
-crud  
-
-# 会生成如下目录
-mysql/
-├── crud
-│   ├── aa_client.go
-│   ├── user
-│   │   └── user.go
-│   └── user.sql
-
-```
-> 以上生成user目录，且package 名称为user。
-
-## CRUD 接口使用
-
-### Create
-
-#### 单条插入
-```go
-u := &user.User{
-	ID:    0,
-	Name:  "shengjie",
-	Age:   18,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-effect, err := user.
-	Create(db).
-	SetUser(u).
-	Save(ctx)
-
-fmt.Println(err, u, effect)
-```
-> 插入单条记录 以上代码插入前需设置ID=0，ID字段为auto_increment，crud会把数据库生成的自增ID赋值给u.ID,插入后u.ID 为db为其生成的ID。
-
-#### 批量插入
+`crud/aa_client.go` 封装了按表划分的子客户端和读写路由：
 
 ```go
-u1 := &user.User{
-	ID:   0,
-	Name: "shengjie",
-	Age:  22,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-u2 := &user.User{
-	ID:   0,
-	Name: "shengjie2",
-	Age:  22,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-effect, err = user.
-	Create(db).
-	SetUser(u1,u2).
-	Save(ctx)
-fmt.Println(effect, err, u1, u2)
-```
-> 以上会插入2条记录，批量插入的时候无法获取到每条记录返回的LastInsertId, 所以执行插入后 u1 和u2 的ID都为0。
+// 读操作路由到从库；写操作路由到主库
+client.User.Find()    // → 从库
+client.User.Create()  // → 主库
+client.User.Update()  // → 主库
+client.User.Delete()  // → 主库
 
-#### Upsert
+client.Master.User.Find() // 强制读主库（如写后读场景）
+```
+
+---
+
+## 初始化 DB 客户端
 
 ```go
+import (
+    "github.com/goflower-io/example/crud"
+    "github.com/goflower-io/xsql"
+)
+
+client, _ := crud.NewClient(&xsql.Config{
+    DSN:          "root:123456@tcp(127.0.0.1:3306)/test?parseTime=true&loc=Local",
+    ReadDSN:      []string{"root:123456@tcp(127.0.0.1:3306)/test?parseTime=true&loc=Local"},
+    Active:       20,
+    Idle:         20,
+    IdleTimeout:  time.Hour * 24,
+    QueryTimeout: time.Second * 10,
+    ExecTimeout:  time.Second * 10,
+}, true) // true = 开启调试日志
+```
+
+---
+
+## CRUD 接口
+
+### Create（新增）
+
+```go
+// 单条插入 — 保存后 a.Id 自动被赋值为数据库自增 ID
 a := &user.User{
-	ID:   1,
-	Name: "shengjie",
-	Age:  19,
+    Id:    0,
+    Name:  "alice",
+    Age:   18,
+    Sex:   1,
+    Ctime: time.Now(),
+    Mtime: time.Now(),
 }
-effect, err := user.
-	Create(db).
-	SetUser(a).
-	Upsert(ctx)
+_, err := client.User.Create().SetUser(a).Save(ctx)
+fmt.Println(a.Id) // 已被赋值
 
-fmt.Println(effect, err, a)
+// 批量插入
+_, err = client.User.Create().SetUser(a, b, c).Save(ctx)
+
+// Upsert（INSERT … ON DUPLICATE KEY UPDATE）
+_, err = client.User.Create().SetUser(a).Upsert(ctx)
 ```
 
-> 如果插入的时候遇到唯一键冲突,那么会把所有字段全都更新为传入的新值。
+也可直接使用包级函数（如配合原始 `*xsql.DB` 使用）：
 
-#### 注意点
-1. 批量插入的时候结构体不会取数据库返回的LastInsertId
-2. 如果数据库的默认值不是其类型的零值，且在插入的操作中相应结构体没有设置该字段的值，那么crud会以其类型的零值插入db
-3. 强烈建议:数值类型必须使用：NOT NULL DEFAULT 0 字符类型必须使用：NOT NULL DEFAULT ""
-
-### Query
-
-#### 查询单条记录
 ```go
-u, err = user.
-	Find(db).
-	Where(user.IdOp.EQ(1)).
-	One(ctx)
-
-fmt.Println(u, err)
+_, err := user.Create(db).SetUser(a).Save(ctx)
+_, err  = user.Create(db).SetUser(a, b).Upsert(ctx)
 ```
-> One(ctx) 会自动设置查询语句limit = 1。
 
+### Query（查询）
 
-#### 查询多条记录
 ```go
-list, err := user.
-	Find(db).
-	Where(
-		user.AgeOp.In(18, 20, 30),
-		).
-	All(ctx)
+// 查询单条 — 自动添加 LIMIT 1
+u, err := client.User.Find().Where(user.IdOp.EQ(1)).One(ctx)
 
-liststr, _ := json.Marshal(list)
-fmt.Printf("%+v %+v \n", string(liststr), err)
+// 写后读：强制从主库读取
+u, err = client.Master.User.Find().Where(user.IdOp.EQ(a.Id)).One(ctx)
+
+// 查询多条
+list, err := client.User.Find().Where(user.AgeOp.In(18, 20, 30)).All(ctx)
+
+// 复合条件 + 排序 + 分页
+list, err = client.User.Find().
+    Where(user.Or(
+        user.IdOp.GT(100),
+        user.AgeOp.In(18, 25),
+    )).
+    OrderDesc(user.Mtime).
+    Offset(0).Limit(20).
+    All(ctx)
+
+// 字符串模糊查询
+list, err = client.User.Find().Where(user.NameOp.Contains("ali")).All(ctx)
+list, err = client.User.Find().Where(user.NameOp.HasPrefix("ali")).All(ctx)
+
+// 指定查询列
+list, err = client.User.Find().
+    Select(user.Id, user.Name, user.Age).
+    Where(user.AgeOp.GT(18)).
+    All(ctx)
+
+// 计数
+count, err := client.User.Find().Count().Where(user.IdOp.GT(0)).Int64(ctx)
+
+// 查询单列列表
+names, err := client.User.Find().
+    Select(user.Name).
+    Where(user.IdOp.In(1, 2, 3)).
+    Strings(ctx)
+
+// GROUP BY / HAVING / 自定义结果结构体
+type Stat struct {
+    Name string `json:"name"`
+    Cnt  int64  `json:"cnt"`
+}
+var result []*Stat
+client.User.Find().
+    Select(user.Name, xsql.As(xsql.Count("*"), "cnt")).
+    ForceIndex("ix_name").
+    GroupBy(user.Name).
+    Having(xsql.GT("cnt", 1)).
+    Slice(ctx, &result)
+// SELECT `name`, COUNT(*) AS `cnt` FROM `user` FORCE INDEX (`ix_name`) GROUP BY `name` HAVING `cnt` > ?
 ```
-> 查询年龄为18，20，30的所有记录，All(ctx)返回的是[]*user.User。
+
+### Update（更新）
 
 ```go
-list, err := user.Find(db)).
-	Where(user.Or(
-		user.IdOp.GT(97),
-		user.AgeOp.In(10, 20, 30),
-		)).
-	OrderAsc(user.Age).
-	Offset(2).
-	Limit(20).
-	All(ctx)
-fmt.Printf("%+v %+v \n", list, err)
+// 设置字段
+_, err := client.User.Update().
+    SetName("bob").SetAge(25).SetSex(0).
+    Where(user.IdOp.EQ(1)).
+    Save(ctx)
+
+// 数值增减
+_, err = client.User.Update().
+    AddAge(-1).
+    Where(user.IdOp.EQ(1)).
+    Save(ctx)
+// UPDATE `user` SET `age` = COALESCE(`age`,0) + -1 WHERE `id` = 1
 ```
-> 丰富的查询条件表达支持
+
+### Delete（删除）
 
 ```go
-list, err := user.
-	Find(db).
-	Where(
-		user.NameOp.Contains("java"),
-		).
-	All(ctx)
-
-list, err = user.
-	Find(db).
-	Where(
-		user.NameOp.HasPrefix("java"),
-		).
-	All(ctx)
+_, err := client.User.Delete().
+    Where(user.IdOp.EQ(1)).
+    Exec(ctx)
+// 线上账号若无删除权限，可改用 Update 实现软删除
 ```
-> 字符串字段模糊查询和前缀匹配。
 
-
-#### 查询结果为单列
-```go
-count, err := user.
-	Find(db).
-	Count().
-	Where(user.IdOp.GT(0)).
-	Int64(ctx)
-
-fmt.Println(count, err)
-
-names, err := user.
-	Find(db).
-	Select(user.Name).
-	Limit(2).
-	Where(
-		user.IdOp.In(1, 2, 3, 4),
-		).
-	Strings(ctx)
-fmt.Println(names, err)
-```
-> Count()查询符合条件记录的数量；如果返回结果只包含一列,且只有一行可以使用Int64、String ；如果返回的结果只包含一列，且有多行，可以用Int64s、Strings得到列表。
-
-
-#### Select()参数说明
+### 事务
 
 ```go
-us, _ := user.Find(db).
-	Select().
-	Where(
-		user.AgeOp.GT(10),
-	).
-	All(ctx)
-
-us2, _ := user.Find(db).
-	Select(user.Columns()...).
-	Where(
-		user.AgeOp.GT(10),
-	).
-	All(ctx)
-
-```
-> 以上两个查询生成的sql语句和结果相同，但是内部有很大的不一样。
-> 当Select() 不指定参数的时候，crud会查找model对应的所有字段，返回结果时不使用反射创建对象,如果返回值有NULL值,则会报错。
-> 当Select(user.Columns()...) 指定所有列名时，返回结果会使用反射来创建对象，返回值如果有NULL值不会报错，该字段默认零值。
-
-### 事务支持
-
-```go
-tx, err := db.Begin(ctx)
+tx, err := client.Begin(ctx)
 if err != nil {
-	return err
+    return err
 }
-u1 := &user.User{
-	ID:   0,
-	Name: "shengjie",
-	Age:  18,
-}
-_, err = user.
-	Create(tx).
-	SetUser(u1).
-	Save(ctx)
+_, err = tx.User.Create().SetUser(u1).Save(ctx)
 if err != nil {
-	return tx.Rollback()
+    return tx.Rollback()
 }
-effect, err := user.
-	Update(tx).
-	SetAge(100).
-	Where(
-		user.IdOp.EQ(u1.ID)
-		).
-	Save(ctx)
-
+_, err = tx.User.Update().SetAge(100).Where(user.IdOp.EQ(u1.Id)).Save(ctx)
 if err != nil {
-	return tx.Rollback()
+    return tx.Rollback()
 }
-fmt.Println(effect, err)
 return tx.Commit()
 ```
-
-
-
-### Advanced Query
-
-#### 自定义查询结果获取
-```go
-type GroupResutl struct {
-	Name string `json:"name"` 
-	Cnt  int64  `json:"cnt"`
-}
-
-result := []*GroupResutl{}
-err := user.Find(db).
-	Select(
-		user.Name,
-		xsql.As(xsql.Count("*"), "cnt"),
-		).
-	ForceIndex(`ix_name`).
-	GroupBy(user.Name).
-	Having(xsql.GT(`cnt`, 1)).
-	Slice(ctx, &result)
-// SELECT `name`, COUNT(*) AS `cnt` FROM `user` FORCE INDEX (`ix_name`) GROUP BY `name` HAVING `cnt` > ? 
-fmt.Println(err, result)
-b, _ := json.Marshal(result)
-fmt.Println(string(b))
-
-```
-> 以上使用了 Force Index 、 GroupBy 、 Having 、Count 、AS 、 把自定义查询结果扫描到自定义的结构体，其中结构体的json tag 需要和查询结果的返回的列名一致，结构体中的字段需要大写。
-
-> Slice(context,interface{})方法第二个参数需要传入的是：指向某个结构体Slice的指针。
-
-
-### Update
-```go
-effect, err := user.
-	Update(db).
-	SetAge(10).
-	Where(user.NameOp.EQ("java")).
-	Save(ctx)
-
-fmt.Println(effect, err)
-
-
-effect, err = user.
-	Update(db).
-	SetAge(100).
-	SetName("java").
-	SetName("python").
-	Where(user.IDOp.EQ(97)).
-	Save(ctx)
-
-fmt.Println(effect, err)
-
-// update `user` set `age` = COALESCE(`age`, 0) + -100, `name` = 'java' where `id` = 5
-effect, err = user.
-	Update(db).
-	AddAge(-100).
-	SetName("java").
-	Where(user.IDOp.EQ(97)).
-	Save(ctx)
-fmt.Println(effect, err)
-
-```
-### Delete
-```go
-
-effect, err = user.
-	Delete(db).
-	Where(
-		user.And(
-			user.IdOp.EQ(3), 
-			user.IdOp.In(1, 3),
-		)).
-	Exec(ctx)
-
-```
-> 在调用Exec方法的时候才真正执行,线上数据库账号不一定有删除的权限，可以用update来改为软删除。
 
 ### 调试日志
 
 ```go
-_, err := user.
-	Create(xsql.Debug(db)).
-	SetUser(u).
-	Save(ctx)
+// 方式一：初始化时全局开启（第二个参数传 true）
+client, _ := crud.NewClient(config, true)
 
-fmt.Println(err)
-```
-> 会打印出生成的sql语句和参数
-
-## 生成GRPC接口定义proto文件和服务实现代码
-
-这个功能帮助我们生成很多需要自己手写的繁琐代码，比如某个项目需要管理后台，增删改查的接口都是需要搭建的，假如在生成的代码的基础上做少许修改就能完成接口编写，那么业务接口实现的会又快又有质量。
-
-### 要提前安装的工具
-
-1. protoc
-2. protoc-gen-go
-3. protoc-gen-go-grpc
-4. make sure /usr/local/include have google/protobuf/empty.proto file
-
-```
-go install google.golang.org/protobuf/cmd/protoc-gen-go
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
-
+// 方式二：单次操作包装
+user.Create(xsql.Debug(db)).SetUser(u).Save(ctx)
+// [xsql] INSERT INTO `user` (`name`, `age`, ...) VALUES (?, ?, ...) [alice 18 ...]
 ```
 
-### 用法
+---
+
+## gRPC 代码生成
+
+### 前置依赖
+
 ```bash
-# 执行
-
-crud -service -protopkg example
-
-# 会生成如下目录
-example/
-├── api
-│   ├── user.api_grpc.pb.go
-│   └── user.api.pb.go
-├── crud
-│   ├── aa_client.go
-│   ├── user
-│   │   ├── user.go
-│   └── user.sql
-├── proto
-│   └── user.api.proto
-└── service
-    └── user.service.go
-
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+# 确保 /usr/local/include 中存在 google/protobuf/empty.proto
 ```
-> 多了 api、proto、service 目录。
 
-### proto example 
-usr.api.proto
+### 生成
+
+```bash
+crud -service -protopkg mypkg
+```
+
+### 生成的 proto（`user.api.proto`）
+
 ```proto
-syntax="proto3";
+syntax = "proto3";
 option go_package = "/api";
-
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
-service UserService { 
-    rpc CreateUser(User)returns(User);
-    rpc DeleteUser(UserId)returns(google.protobuf.Empty);
-    rpc UpdateUser(UpdateUserReq)returns(User);
-    rpc GetUser(UserId)returns(User);
-    rpc ListUsers(ListUsersReq)returns(ListUsersResp);
+service UserService {
+    rpc CreateUser(User)                returns (User);
+    rpc DeleteUser(UserId)              returns (google.protobuf.Empty);
+    rpc UpdateUser(UpdateUserReq)       returns (User);
+    rpc GetUser(UserId)                 returns (User);
+    rpc ListUsers(ListUsersReq)         returns (ListUsersResp);
+    rpc ListUsersMore(ListUsersMoreReq) returns (ListUsersMoreResp);
 }
 
-message User {
-    //id字段
-    int64	id = 1 ; // @gotags: json:"id"
-    //名称
-    string	name = 2 ; // @gotags: json:"name"
-    //年龄
-    int64	age = 3 ; // @gotags: json:"age"
-    //创建时间
-    string	ctime = 4 ; // @gotags: json:"ctime"
-    //更新时间
-    string	mtime = 5 ; // @gotags: json:"mtime"  
+message UpdateUserReq {
+    User           user  = 1;
+    repeated UserField masks = 2; // 枚举字段掩码
 }
 
-enum UserField{
-    User_unknow = 0;
-    User_id = 1;
-    User_name = 2;
-    User_age = 3;
-    User_ctime = 4;
-    User_mtime = 5;   
+message ListUsersReq {
+    int32                page          = 1;
+    int32                page_size     = 2;
+    repeated UserOrderBy orderbys      = 3;
+    repeated UserFilter  filters       = 4;
+    repeated UserField   select_fields = 5;
 }
-
-message UserId{
-    int64 id = 1 ; // @gotags: form:"id"
-}
-
-message UpdateUserReq{
-
-    User user = 1 ;
-
-    repeated string update_mask  = 2 ;
-}
-
-
-message ListUsersReq{
-    // number of page
-    int32 page = 1 ;// @gotags: form:"page"
-    // default 20
-    int32 page_size = 2 ;// @gotags: form:"page_size"
-    // order by field
-    UserField order_by_field = 3 ; // @gotags: form:"order_by_field"
-    // ASC DESC
-    bool order_by_desc = 4; //@gotags: form:"order_by_desc"
-     // filter
-    repeated UserFilter filters = 5 ; //@gotags: form:"filters"
-}
-
-message UserFilter{
-     UserField field = 1;
-    string op = 2;
-    string value = 3;
-}
-
-message ListUsersResp{
-
-    repeated User users = 1 ; // @gotags: json:"users"
-
-    int32 total_count = 2 ; // @gotags: json:"total_count"
-    
-    int32 page_count = 3 ; // @gotags: json:"page_count"
-}
-
 ```
-> 生成和表结构一一对应的 message ,生成的api文件符合google 设计规范。
 
-### service example 
-user.service.go
+### 生成的服务骨架（`user.service.go`）关键模式
+
 ```go
-package service
-
-import (
-	"context"
-	"github.com/goflower-io/crud/example/api"
-	"github.com/goflower-io/crud/example/crud"
-	"github.com/goflower-io/crud/example/crud/user"
-	"math"
-	"strings"
-	"time"
-
-	"github.com/goflower-io/xsql"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
-)
-
-// UserServiceImpl UserServiceImpl
-type UserServiceImpl struct {
-	api.UnimplementedUserServiceServer
-	Client *crud.Client
-}
-
-type IValidateUser interface {
-	ValidateUser(a *api.User) error
-}
-
-// CreateUser CreateUser
+// CreateUser — 插入后从主库读取（写后读一致性）
 func (s *UserServiceImpl) CreateUser(ctx context.Context, req *api.User) (*api.User, error) {
-	if checker, ok := interface{}(s).(IValidateUser); ok {
-		if err := checker.ValidateUser(req); err != nil {
-			return nil, err
-		}
-	}
-
-	a := &user.User{
-		Id:    0,
-		Name:  req.GetName(),
-		Age:   req.GetAge(),
-		Ctime: time.Now(),
-		Mtime: time.Now(),
-	}
-	var err error
-	_, err = s.Client.User.
-		Create().
-		SetUser(a).
-		Save(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	// query after create and return
-	a2, err := s.Client.Master.User.
-		Find().
-		Where(
-			user.IdOp.EQ(a.Id),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return convertUser(a2), nil
+    a := &user.User{
+        Name:  req.GetName(),
+        Age:   req.GetAge(),
+        Sex:   req.GetSex(),
+        Ctime: time.Now(),
+        Mtime: time.Now(),
+    }
+    _, err := s.Client.User.Create().SetUser(a).Save(ctx)
+    if err != nil {
+        return nil, status.Error(codes.Internal, err.Error())
+    }
+    // 写后读：强制从主库查询
+    a2, err := s.Client.Master.User.Find().Where(user.IdOp.EQ(a.Id)).One(ctx)
+    if err != nil {
+        return nil, status.Error(codes.Internal, err.Error())
+    }
+    return convertUser(a2), nil
 }
 
-// DeleteUser DeleteUser
-func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *api.UserId) (*emptypb.Empty, error) {
-	_, err := s.Client.User.
-		Delete().
-		Where(
-			user.IdOp.EQ(req.GetId()),
-		).
-		Exec(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return &emptypb.Empty{}, nil
-}
-
-// Updateuser UpdateUser
+// UpdateUser — 枚举字段掩码精确控制更新字段
 func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *api.UpdateUserReq) (*api.User, error) {
-	if checker, ok := interface{}(s).(IValidateUser); ok {
-		if err := checker.ValidateUser(req.User); err != nil {
-			return nil, err
-		}
-	}
-	if len(req.GetUpdateMask()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "empty filter condition")
-	}
-	update := s.Client.User.Update()
-	for _, v := range req.GetUpdateMask() {
-		switch v {
-		case user.Name:
-			update.SetName(req.GetUser().GetName())
-		case user.Age:
-			update.SetAge(req.GetUser().GetAge())
-		case user.Ctime:
-			t, err := time.ParseInLocation("2006-01-02 15:04:05", req.GetUser().GetCtime(), time.Local)
-			if err != nil {
-				return nil, status.Error(codes.InvalidArgument, err.Error())
-			}
-			update.SetCtime(t)
-		case user.Mtime:
-			t, err := time.ParseInLocation("2006-01-02 15:04:05", req.GetUser().GetMtime(), time.Local)
-			if err != nil {
-				return nil, status.Error(codes.InvalidArgument, err.Error())
-			}
-			update.SetMtime(t)
-		}
-	}
-	_, err := update.
-		Where(
-			user.IdOp.EQ(req.GetUser().GetId()),
-		).
-		Save(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	// query after update and return
-	a, err := s.Client.Master.User.
-		Find().
-		Where(
-			user.IdOp.EQ(req.GetUser().GetId()),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return convertUser(a), nil
+    if len(req.GetMasks()) == 0 {
+        return nil, status.Error(codes.InvalidArgument, "empty filter condition")
+    }
+    update := s.Client.User.Update()
+    for _, v := range req.GetMasks() {
+        switch v {
+        case api.UserField_User_name:
+            update.SetName(req.GetUser().GetName())
+        case api.UserField_User_age:
+            update.SetAge(req.GetUser().GetAge())
+        case api.UserField_User_sex:
+            update.SetSex(req.GetUser().GetSex())
+        }
+    }
+    _, err := update.Where(user.IdOp.EQ(req.GetUser().GetId())).Save(ctx)
+    // ...
 }
 
-// GetUser GetUser
-func (s *UserServiceImpl) GetUser(ctx context.Context, req *api.UserId) (*api.User, error) {
-	a, err := s.Client.User.
-		Find().
-		Where(
-			user.IdOp.EQ(req.GetId()),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
-	}
-	return convertUser(a), nil
-}
-
-// ListUsers ListUsers
+// ListUsers — 动态过滤 + 多列排序 + 指定返回字段
 func (s *UserServiceImpl) ListUsers(ctx context.Context, req *api.ListUsersReq) (*api.ListUsersResp, error) {
-	page := req.GetPage()
-	size := req.GetPageSize()
-	if size <= 0 {
-		size = 20
-	}
-	offset := size * (page - 1)
-	if offset < 0 {
-		offset = 0
-	}
-	finder := s.Client.User.
-		Find().
-		Offset(offset).
-		Limit(size)
+    finder := s.Client.User.Find().
+        Select(selectFields...).
+        Offset(offset).Limit(size)
 
-	if req.GetOrderByField() == api.UserField_User_unknow {
-		req.OrderByField = api.UserField_User_id
-	}
-	odb := strings.TrimPrefix(req.GetOrderByField().String(), "User_")
-	if req.GetOrderByDesc() {
-		finder.OrderDesc(odb)
-	} else {
-		finder.OrderAsc(odb)
-	}
-	counter := s.Client.User.
-		Find().
-		Count()
-
-	var ps []*xsql.Predicate
-	for _, v := range req.GetFilters() {
-		p, err := xsql.GenP(strings.TrimPrefix(v.Field.String(), "User_"), v.Op, v.Value)
-		if err != nil {
-			return nil, err
-		}
-		ps = append(ps, p)
-	}
-	if len(ps) > 0 {
-		p := xsql.And(ps...)
-		finder.WhereP(p)
-		counter.WhereP(p)
-	}
-	list, err := finder.All(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	count, err := counter.Int64(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	pageCount := int32(math.Ceil(float64(count) / float64(size)))
-
-	return &api.ListUsersResp{Users: convertUserList(list), TotalCount: int32(count), PageCount: pageCount}, nil
+    for _, v := range req.GetOrderbys() {
+        col := strings.TrimPrefix(v.GetField().String(), "User_")
+        if v.GetDesc() {
+            finder.OrderDesc(col)
+        } else {
+            finder.OrderAsc(col)
+        }
+    }
+    for _, v := range req.GetFilters() {
+        p, _ := xsql.GenP(strings.TrimPrefix(v.Field.String(), "User_"), v.Op, v.Val)
+        ps = append(ps, p)
+    }
+    if len(ps) > 0 {
+        finder.WhereP(xsql.And(ps...))
+    }
+    // ...
 }
+```
 
-func convertUser(a *user.User) *api.User {
-	return &api.User{
-		Id:    a.Id,
-		Name:  a.Name,
-		Age:   a.Age,
-		Ctime: a.Ctime.Format("2006-01-02 15:04:05"),
-		Mtime: a.Mtime.Format("2006-01-02 15:04:05"),
-	}
-}
+### 与 golib 集成并用 grpcurl 测试
 
-func convertUserList(list []*user.User) []*api.User {
-	ret := make([]*api.User, 0, len(list))
-	for _, v := range list {
-		ret = append(ret, convertUser(v))
-	}
-	return ret
-}
+```go
+import "github.com/goflower-io/golib/net/app"
 
+a := app.New(app.WithAddr("0.0.0.0", 8080))
+a.RegisteGrpcService(&api.UserService_ServiceDesc, &service.UserServiceImpl{Client: client})
+a.Run()
+```
 
+```bash
+# 安装 grpcurl
+go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+# 列出所有服务（golib 自动注册 gRPC 反射）
+grpcurl -plaintext localhost:8080 list
+
+# 查看 UserService 接口描述
+grpcurl -plaintext localhost:8080 describe UserService
+
+# 创建用户
+grpcurl -plaintext \
+  -d '{"name":"alice","age":18,"sex":1}' \
+  localhost:8080 UserService/CreateUser
+
+# 按 ID 查询用户
+grpcurl -plaintext \
+  -d '{"id":1}' \
+  localhost:8080 UserService/GetUser
+
+# 更新指定字段（masks 使用 UserField 枚举值：2=name, 3=age, 4=sex）
+grpcurl -plaintext \
+  -d '{"user":{"id":1,"name":"bob","age":25,"sex":0},"masks":[2,3]}' \
+  localhost:8080 UserService/UpdateUser
+
+# 分页查询用户列表
+grpcurl -plaintext \
+  -d '{"page":1,"page_size":10}' \
+  localhost:8080 UserService/ListUsers
+
+# 带过滤（age > 18）、排序（mtime 倒序）、指定返回字段（id+name+age）
+grpcurl -plaintext \
+  -d '{
+    "page": 1,
+    "page_size": 10,
+    "filters":       [{"field":3,"op":"GT","val":"18"}],
+    "orderbys":      [{"field":6,"desc":true}],
+    "select_fields": [1,2,3]
+  }' \
+  localhost:8080 UserService/ListUsers
+
+# 游标分页（适合大数据集，无需 COUNT(*)）
+grpcurl -plaintext \
+  -d '{"page_size":5,"cursor":{"orderbys":[{"field":1,"desc":false}]}}' \
+  localhost:8080 UserService/ListUsersMore
+
+# 删除用户
+grpcurl -plaintext \
+  -d '{"id":1}' \
+  localhost:8080 UserService/DeleteUser
+```
+
+**UserField 枚举值对照表：**
+
+| 枚举值 | 字段 |
+|---|---|
+| 1 | id |
+| 2 | name |
+| 3 | age |
+| 4 | sex |
+| 5 | ctime |
+| 6 | mtime |
+
+---
+
+## CLI 参数
 
 ```
-> 以上service的半实现代码只需要自己加一些参数校验，或者根据条件filter的代码，自动生成了db层model结构体的到api层的message转化代码,方便灵活。
+crud 参数说明：
+  -dialect string   数据库方言：mysql | postgres | sqlite3  （默认 "mysql"）
+  -protopkg string  生成 proto 文件的 go_package 包名
+  -service          同时生成 gRPC proto 文件和服务骨架
+```
 
+---
 
+## 最佳实践
 
-
-> The project is inspired by [facebook/ent](https://github.com/ent/ent) 
+1. 数值类型字段使用 `NOT NULL DEFAULT 0`，字符串类型使用 `NOT NULL DEFAULT ''`——避免 NULL 值引起的意外行为。
+2. 将 `.sql` 文件和生成代码一起纳入版本控制——表结构变更可在 Code Review 中可见。
+3. 写后读场景使用 `client.Master.User.Find()` 强制从主库读取，保证一致性。
+4. 使用 [golib](https://github.com/goflower-io/golib) `app.New()` 在同一端口提供 gRPC 和 HTTP 服务，内置 Panic 恢复、结构化日志和 Prometheus 指标。

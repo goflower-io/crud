@@ -1,789 +1,530 @@
+# crud — Code Generation ORM for Go
 
-# crud is a crud code generate tool support mysql,mariadb,postgresql,sqlite3,monogdb
+**Design your table, get your code.** crud generates type-safe, high-performance CRUD code from SQL DDL for MySQL, MariaDB, PostgreSQL, and SQLite3.
 
-## [中文文档](README_zh.md)
+> Inspired by [facebook/ent](https://github.com/ent/ent)
 
+[中文文档](README_zh.md) | [Examples](https://github.com/goflower-io/example) | [xsql](https://github.com/goflower-io/xsql) | [golib](https://github.com/goflower-io/golib)
 
-## Overview
+---
 
-Crud is a very easy to learn and easy to use ORM framework. Using crud can enable you to complete business requirements quickly, gracefully and with high performance. Currently, mysql,mariadb,postgresql,sqlite3,monogdb are supported.
+## Why crud?
 
+| Feature | Description |
+|---|---|
+| Table-first workflow | Write DDL → run `crud` → get production-ready Go code instantly |
+| Zero reflection on hot paths | Querying all fields uses no reflection; performance matches hand-written SQL |
+| IDE-friendly API | Full autocomplete, no magic strings in query conditions |
+| Batteries included | Transactions, row-level locking (`FOR UPDATE`, `LOCK IN SHARE MODE`), upsert, batch insert |
+| gRPC ready | One flag generates `.proto` files + service skeleton following Google API Design Guide |
+| Read-write separation | Built-in master/slave routing with round-robin load balancing via [xsql](https://github.com/goflower-io/xsql) |
 
-- From SQL DDL table structure design to corresponding model and service generation, it conforms to the process of creating tables before writing code
+---
 
-- Supports transactions, row-level locking, for update, lock in share mode
-
-- Elegant API, no ugly hard coding, SQL fragments, all static method calls, and automatic prompt of IDE
-
-- It supports batch insertion, upsert, and automatic assignment of self incrementing ID to structure
-
-- Support context
-
-- High performance. When querying all fields in the table, no reflection is used to create objects, and the performance is consistent with that of native
-
-- Query support forceindex
-
-- Query supports flexible setting of query criteria
-
-- Query supports group by and having
-
-- Query supports scan query results to user-defined structures (using reflection)
-
-- Server code standardization
-
-- Support the generation of proto files and service semi implementation codes containing grpc interface definitions according to SQL DDL table structure definition files
-
-
-## [example](https://github.com/goflower-io/crud-example)
-## [mysql,postgresql,sqlite3 examples](./example)
-## Getting Started 
-
-### install
-
-```bash
-
-go install  github.com/goflower-io/crud@main
+## Ecosystem
 
 ```
-### Using the command line
-
-```bash
-crud -h 
-
-Usage of crud:
-  -dialect string
-    	-dialete only support mysql postgres sqlite3, default mysql  (default "mysql")
-  -protopkg string
-    	-protopkg  proto package field value
-  -service
-    	-service  generate GRPC proto message and service implementation
+┌─────────────────────────────────────────────────────┐
+│                      example                         │
+│   (MySQL / PostgreSQL / SQLite3 full-stack demo)     │
+└──────────┬──────────────────────────────────────────┘
+           │ uses
+    ┌──────▼──────┐   generates   ┌──────────┐
+    │    crud     │──────────────▶│  your    │
+    │  (codegen)  │               │  models  │
+    └─────────────┘               └────┬─────┘
+                                       │ runtime
+    ┌─────────────┐   DB client  ┌─────▼──────┐
+    │    xsql     │◀─────────────│  generated  │
+    │ (SQL build) │              │    code     │
+    └─────────────┘              └─────┬───────┘
+                                       │ served by
+    ┌─────────────┐                    │
+    │    golib    │◀───────────────────┘
+    │(HTTP/gRPC)  │
+    └─────────────┘
 ```
 
-```mysql example
-#  generation crud directory
+---
+
+## Quick Start
+
+### 1. Install
+
+```bash
+go install github.com/goflower-io/crud@main
+```
+
+### 2. Write your SQL DDL
+
+```sql
+-- crud/sql/user.sql
+CREATE TABLE `user` (
+  `id`    int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'id',
+  `name`  varchar(100)     NOT NULL COMMENT '名称|text|validate:"max=100,min=10"',
+  `age`   int(11)          NOT NULL DEFAULT '0'  COMMENT '年龄|number|validate:"max=140,min=18"',
+  `sex`   int(11)          NOT NULL DEFAULT '2'  COMMENT '性别|select|validate:"oneof=0 1 2"|0:女 1:男 2:无',
+  `ctime` datetime         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `mtime` datetime         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `ix_name`  (`name`)  USING BTREE,
+  KEY `ix_mtime` (`mtime`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### 3. Generate code
+
+```bash
+# Initialize crud directory in your project root
 crud init
 
-# Put user.sql In the crud directory sql
+# Place user.sql in crud/sql/, then generate CRUD model
+crud
 
-
-# According to the table structure, generate the proto file of grpc interface and service semi implementation code for the CRUD of the table
-crud  -service -protopkg example
-
+# Also generate gRPC proto + service skeleton
+crud -service -protopkg mypkg
 ```
 
-## Init
-
-
-### Init db
-```go
-
-db, _ = sql.Open("mysql","user:pwd@tcp(127.0.0.1:3306)/example?timeout=1s&readTimeout=1s&writeTimeout=1s&parseTime=true&loc=Local&charset=utf8mb4,utf8")
+Generated layout:
 
 ```
+myproject/
+├── crud/
+│   ├── aa_client.go          # DB client with read-write separation
+│   ├── sql/user.sql
+│   └── user/
+│       └── user.go           # Generated model + all CRUD operations
+├── proto/
+│   └── user.api.proto        # gRPC service definition
+├── api/
+│   ├── user.api.pb.go
+│   └── user.api_grpc.pb.go
+└── service/
+    └── user.service.go       # gRPC service skeleton (fill in validation)
+```
 
-### Or the client wrapped in curd has read-write separation and context read-write timeout configuration ability
+---
+
+## Generated Code Overview
+
+`crud/user/user.go` contains the model, column constants, and typed field operators:
 
 ```go
-
-var client *crud.Client
-
-var dsn = "root:123456@tcp(127.0.0.1:3306)/test?parseTime=true"
-
-func InitDB2() {
-	client, _ = crud.NewClient(&xsql.Config{
-		DSN:          dsn,
-		ReadDSN:      []string{dsn},
-		Active:       10,
-		Idle:         10,
-		IdleTimeout:  time.Hour,
-		QueryTimeout: time.Second,
-		ExecTimeout:  time.Second,
-	})
+type User struct {
+    Id    int64     `json:"id"`
+    Name  string    `json:"name"`
+    Age   int64     `json:"age"`
+    Sex   int64     `json:"sex"`
+    Ctime time.Time `json:"ctime"`
+    Mtime time.Time `json:"mtime"`
 }
+
+// Column name constants
+const (
+    Id    = "id"
+    Name  = "name"
+    Age   = "age"
+    Sex   = "sex"
+    Ctime = "ctime"
+    Mtime = "mtime"
+)
+
+// Typed field operators — used to build WHERE conditions
+const (
+    IdOp    = xsql.FieldOp[int64]("id")
+    NameOp  = xsql.StrFieldOp("name")
+    AgeOp   = xsql.FieldOp[int64]("age")
+    SexOp   = xsql.FieldOp[int64]("sex")
+    CtimeOp = xsql.FieldOp[string]("ctime")
+    MtimeOp = xsql.FieldOp[string]("mtime")
+)
 ```
 
+`crud/aa_client.go` wraps the DB with per-table sub-clients and read-write routing:
 
-### As user SQL table creation file as an example
+```go
+// Read operations route to replicas; write operations go to master
+client.User.Find()    // → slave
+client.User.Create()  // → master
+client.User.Update()  // → master
+client.User.Delete()  // → master
 
-```SQL
-CREATE TABLE `user` (
-  `id` int(10) unsigned NOT NULL AUTO_INCREMENT COMMENT 'id字段',
-  `name` varchar(100) NOT NULL COMMENT '名称',
-  `age` int(11) NOT NULL DEFAULT '0' COMMENT '年龄',
-  `ctime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `mtime` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `ix_name` (`name`) USING BTREE,
-  KEY `ix_mtime` (`mtime`) USING BTREE
-) ENGINE=InnoDB  DEFAULT CHARSET=utf8mb4
+client.Master.User.Find() // force master read (e.g. read-after-write)
 ```
 
-```bash
-# exec crud under example
-crud 
+---
 
-# The following user directories and files will be generated
-mysql/
-├── crud
-│   ├── aa_client.go
-│   ├── user
-│   │   └── user.go
-│   └── user.sql
+## Initialize DB Client
 
+```go
+import (
+    "github.com/goflower-io/example/crud"
+    "github.com/goflower-io/xsql"
+)
+
+client, _ := crud.NewClient(&xsql.Config{
+    DSN:          "root:123456@tcp(127.0.0.1:3306)/test?parseTime=true&loc=Local",
+    ReadDSN:      []string{"root:123456@tcp(127.0.0.1:3306)/test?parseTime=true&loc=Local"},
+    Active:       20,
+    Idle:         20,
+    IdleTimeout:  time.Hour * 24,
+    QueryTimeout: time.Second * 10,
+    ExecTimeout:  time.Second * 10,
+}, true) // true = enable debug logging
 ```
-> The user directory is generated above, and the package name is user.
+
+---
 
 ## CRUD API
 
 ### Create
 
-#### Single insert
 ```go
-u := &user.User{
-	ID:    0,
-	Name:  "shengjie",
-	Age:   18,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-effect, err := user.
-	Create(db).
-	SetUser(u).
-	Save(ctx)
-
-fmt.Println(err, u, effect)
-```
-> Insert a single record. Before inserting the above code, set id = 0 and ID field as auto_increment, crud will assign the self increasing ID generated by the database to u.ID, and the u.ID after insertion is the ID generated by DB.
-
-
-#### Batch insert
-
-```go
-u1 := &user.User{
-	ID:   0,
-	Name: "shengjie",
-	Age:  22,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-u2 := &user.User{
-	ID:   0,
-	Name: "shengjie2",
-	Age:  22,
-	Ctime: time.Now(),
-	Mtime: time.Now(),
-}
-effect, err = user.
-	Create(db).
-	SetUser(u1,u2).
-	Save(ctx)
-fmt.Println(effect, err, u1, u2)
-```
-> The above two records will be inserted. The lastinsertid returned by each record cannot be obtained during batch insertion, so the ID of U1 and U2 after insertion are 0.
-
-#### Upsert
-
-```go
+// Single insert — a.Id is populated with the auto-increment ID after save
 a := &user.User{
-	ID:   1,
-	Name: "shengjie",
-	Age:  19,
+    Id:    0,
+    Name:  "alice",
+    Age:   18,
+    Sex:   1,
+    Ctime: time.Now(),
+    Mtime: time.Now(),
 }
-effect, err := user.
-	Create(db).
-	SetUser(a).
-	Upsert(ctx)
+_, err := client.User.Create().SetUser(a).Save(ctx)
+fmt.Println(a.Id) // set by DB
 
-fmt.Println(effect, err, a)
+// Batch insert
+_, err = client.User.Create().SetUser(a, b, c).Save(ctx)
+
+// Upsert (INSERT … ON DUPLICATE KEY UPDATE)
+_, err = client.User.Create().SetUser(a).Upsert(ctx)
 ```
 
-> If a unique key conflict is encountered during insertion, all fields will be updated with the new value passed in.
+Or use the package-level functions directly (e.g. with a raw `*xsql.DB`):
 
-#### Attention
-1. During batch insertion, the structure will not take the lastinsertid returned by the database.
-
-2. If the default value of the database is not the zero value of its type, and the corresponding structure does not set the value of this field in the insertion operation, crud will insert dB with the zero value of its type.
-
-3. It is strongly recommended that the value type must use: not null default 0, and the string type must use: not null default ""
-
+```go
+_, err := user.Create(db).SetUser(a).Save(ctx)
+_, err  = user.Create(db).SetUser(a, b).Upsert(ctx)
+```
 
 ### Query
 
-#### Query a single record
 ```go
-u, err = user.
-	Find(db).
-	Where(user.IdOp.EQ(1)).
-	One(ctx)
+// Single record — automatically adds LIMIT 1
+u, err := client.User.Find().Where(user.IdOp.EQ(1)).One(ctx)
 
-fmt.Println(u, err)
+// Force read from master (read-after-write consistency)
+u, err = client.Master.User.Find().Where(user.IdOp.EQ(a.Id)).One(ctx)
+
+// Multiple records
+list, err := client.User.Find().Where(user.AgeOp.In(18, 20, 30)).All(ctx)
+
+// Complex conditions + ordering + pagination
+list, err = client.User.Find().
+    Where(user.Or(
+        user.IdOp.GT(100),
+        user.AgeOp.In(18, 25),
+    )).
+    OrderDesc(user.Mtime).
+    Offset(0).Limit(20).
+    All(ctx)
+
+// String operations
+list, err = client.User.Find().Where(user.NameOp.Contains("ali")).All(ctx)
+list, err = client.User.Find().Where(user.NameOp.HasPrefix("ali")).All(ctx)
+
+// Select specific columns
+list, err = client.User.Find().
+    Select(user.Id, user.Name, user.Age).
+    Where(user.AgeOp.GT(18)).
+    All(ctx)
+
+// Count
+count, err := client.User.Find().Count().Where(user.IdOp.GT(0)).Int64(ctx)
+
+// Single column list
+names, err := client.User.Find().
+    Select(user.Name).
+    Where(user.IdOp.In(1, 2, 3)).
+    Strings(ctx)
+
+// GROUP BY / HAVING / custom result struct
+type Stat struct {
+    Name string `json:"name"`
+    Cnt  int64  `json:"cnt"`
+}
+var result []*Stat
+client.User.Find().
+    Select(user.Name, xsql.As(xsql.Count("*"), "cnt")).
+    ForceIndex("ix_name").
+    GroupBy(user.Name).
+    Having(xsql.GT("cnt", 1)).
+    Slice(ctx, &result)
+// SELECT `name`, COUNT(*) AS `cnt` FROM `user` FORCE INDEX (`ix_name`) GROUP BY `name` HAVING `cnt` > ?
 ```
-> One(ctx) will automatically set the query statement limit = 1.
 
+### Update
 
-#### Query multiple records
 ```go
-list, err := user.
-	Find(db).
-	Where(
-		user.AgeOp.In(18, 20, 30),
-		).
-	All(ctx)
+// Set fields
+_, err := client.User.Update().
+    SetName("bob").SetAge(25).SetSex(0).
+    Where(user.IdOp.EQ(1)).
+    Save(ctx)
 
-liststr, _ := json.Marshal(list)
-fmt.Printf("%+v %+v \n", string(liststr), err)
+// Increment / decrement
+_, err = client.User.Update().
+    AddAge(-1).
+    Where(user.IdOp.EQ(1)).
+    Save(ctx)
+// UPDATE `user` SET `age` = COALESCE(`age`,0) + -1 WHERE `id` = 1
 ```
-> Query all records with ages of 18, 20 and 30, and All(ctx) returns []*user.User .
+
+### Delete
 
 ```go
-list, err := user.Find(db)).
-	Where(user.Or(
-		user.IdOp.GT(97),
-		user.AgeOp.In(10, 20, 30),
-		)).
-	OrderAsc(user.Age).
-	Offset(2).
-	Limit(20).
-	All(ctx)
-fmt.Printf("%+v %+v \n", list, err)
+_, err := client.User.Delete().
+    Where(user.IdOp.EQ(1)).
+    Exec(ctx)
 ```
-> Rich query criteria expression support
+
+### Transactions
 
 ```go
-list, err := user.
-	Find(db).
-	Where(
-		user.NameOp.Contains("java"),
-		).
-	All(ctx)
-
-list, err = user.
-	Find(db).
-	Where(
-		user.NameOp.HasPrefix("java"),
-		).
-	All(ctx)
-```
-> String field fuzzy query and prefix matching.
-
-
-#### The query result is a single column
-```go
-count, err := user.
-	Find(db).
-	Count().
-	Where(user.IdOp.GT(0)).
-	Int64(ctx)
-
-fmt.Println(count, err)
-
-names, err := user.
-	Find(db).
-	Select(user.Name).
-	Limit(2).
-	Where(
-		user.IdOp.In(1, 2, 3, 4),
-		).
-	Strings(ctx)
-fmt.Println(names, err)
-```
-> Count() query the quantity of qualified records; If the returned result contains only one column and only one row, Int64 and String can be used; If the returned result contains only one column and multiple rows, you can use Int64s and Strings to get the list.
-
-#### Select () parameter description
-
-```go
-us, _ := user.Find(db).
-	Select().
-	Where(
-		user.AgeOp.GT(10),
-	).
-	All(ctx)
-
-us2, _ := user.Find(db).
-	Select(user.Columns()...).
-	Where(
-		user.AgeOp.GT(10),
-	).
-	All(ctx)
-
-```
-> The SQL statements and results generated by the above two queries are the same, but they are very different internally.
-> When Select() does not specify parameters, crud will find all fields corresponding to the model. When returning results, it does not use reflection to create objects, If the return value has a null value, an error will be returned.
-> When Select(user.Columns()...) When all column names are specified, the returned results will use reflection to create objects. If the return value has a null value, no error will be reported, and the default value of this field is zero
-
-### Transaction support
-
-```go
-tx, err := db.Begin(ctx)
+tx, err := client.Begin(ctx)
 if err != nil {
-	return err
+    return err
 }
-u1 := &user.User{
-	ID:   0,
-	Name: "shengjie",
-	Age:  18,
-}
-_, err = user.
-	Create(tx).
-	SetUser(u1).
-	Save(ctx)
+_, err = tx.User.Create().SetUser(u1).Save(ctx)
 if err != nil {
-	return tx.Rollback()
+    return tx.Rollback()
 }
-effect, err := user.
-	Update(tx).
-	SetAge(100).
-	Where(
-		user.IdOp.EQ(u1.ID)
-		).
-	Save(ctx)
-
+_, err = tx.User.Update().SetAge(100).Where(user.IdOp.EQ(u1.Id)).Save(ctx)
 if err != nil {
-	return tx.Rollback()
+    return tx.Rollback()
 }
-fmt.Println(effect, err)
 return tx.Commit()
 ```
 
-
-
-### Advanced Query
-
-#### Custom query result acquisition
-```go
-type GroupResutl struct {
-	Name string `json:"name"` 
-	Cnt  int64  `json:"cnt"`
-}
-
-result := []*GroupResutl{}
-err := user.Find(db).
-	Select(
-		user.Name,
-		xsql.As(xsql.Count("*"), "cnt"),
-		).
-	ForceIndex(`ix_name`).
-	GroupBy(user.Name).
-	Having(xsql.GT(`cnt`, 1)).
-	Slice(ctx, &result)
-// SELECT `name`, COUNT(*) AS `cnt` FROM `user` FORCE INDEX (`ix_name`) GROUP BY `name` HAVING `cnt` > ? 
-fmt.Println(err, result)
-b, _ := json.Marshal(result)
-fmt.Println(string(b))
-
-```
-> The above uses force index, groupby, having, count and as to scan the user-defined query results into the user-defined structure. The JSON tag of the structure needs to be consistent with the column name returned from the query results, and the fields in the structure need to be capitalized.
-
-> Slice(context,interface{}):The second parameter of the method needs to be passed in: a pointer to a structure slice
-
-
-### Update
-```go
-
-effect, err := user.
-	Update(db).
-	SetAge(10).
-	Where(user.NameOp.EQ("java")).
-	Save(ctx)
-
-fmt.Println(effect, err)
-
-
-effect, err = user.
-	Update(db).
-	SetAge(100).
-	SetName("java").
-	SetName("python").
-	Where(user.IDOp.EQ(97)).
-	Save(ctx)
-
-fmt.Println(effect, err)
-
-// update `user` set `age` = COALESCE(`age`, 0) + -100, `name` = 'java' where `id` = 5
-effect, err = user.
-	Update(db).
-	AddAge(-100).
-	SetName("java").
-	Where(user.IDOp.EQ(97)).
-	Save(ctx)
-fmt.Println(effect, err)
-
-```
-### Delete
-```go
-
-effect, err = user.
-	Delete(db).
-	Where(
-		user.And(
-			user.IdOp.EQ(3), 
-			user.IdOp.In(1, 3),
-		)).
-	Exec(ctx)
-
-```
-> It is only executed when the Exec method is called
-
-
-### Debug Log
+### Debug logging
 
 ```go
-_, err := user.
-	Create(xsql.Debug(db)).
-	SetUser(u).
-	Save(ctx)
+// Option 1: enable debug on the whole client at init time
+client, _ := crud.NewClient(config, true)
 
-fmt.Println(err)
-```
-> The generated SQL statement and parameters will be printed
-
-## Generate grpc interface definition proto file and service implementation code
-
-This function helps us generate a lot of cumbersome code that needs to be written by ourselves. For example, a project needs to manage the background, and the interfaces for adding, deleting, modifying and querying need to be built. If we can complete the interface writing with a little modification on the basis of the generated code, the business interface will be realized quickly and with quality.
-
-### Dependencies
-
-1. protoc
-2. protoc-gen-go
-3. protoc-gen-go-grpc
-4. make sure /usr/local/include have google/protobuf/empty.proto file
-
-
-```
-go install google.golang.org/protobuf/cmd/protoc-gen-go
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
+// Option 2: wrap a single operation
+user.Create(xsql.Debug(db)).SetUser(u).Save(ctx)
+// [xsql] INSERT INTO `user` (`name`, `age`, ...) VALUES (?, ?, ...) [alice 18 ...]
 ```
 
-### usage
+---
+
+## gRPC Code Generation
+
+### Prerequisites
+
 ```bash
-
-crud -service -protopkg example
-
-
-example/
-├── api
-│   ├── user.api_grpc.pb.go
-│   └── user.api.pb.go
-├── crud
-│   ├── aa_client.go
-│   ├── user
-│   │   ├── user.go
-│   └── user.sql
-├── proto
-│   └── user.api.proto
-└── service
-    └── user.service.go
-
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+# Ensure /usr/local/include contains google/protobuf/empty.proto
 ```
-> There are more api and service directories and proto files.
 
-### proto example 
-usr.api.proto
+### Generate
+
+```bash
+crud -service -protopkg mypkg
+```
+
+### Generated proto (`user.api.proto`)
+
 ```proto
-syntax="proto3";
+syntax = "proto3";
 option go_package = "/api";
-
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
-service UserService { 
-    rpc CreateUser(User)returns(User);
-    rpc DeleteUser(UserId)returns(google.protobuf.Empty);
-    rpc UpdateUser(UpdateUserReq)returns(User);
-    rpc GetUser(UserId)returns(User);
-    rpc ListUsers(ListUsersReq)returns(ListUsersResp);
+service UserService {
+    rpc CreateUser(User)              returns (User);
+    rpc DeleteUser(UserId)            returns (google.protobuf.Empty);
+    rpc UpdateUser(UpdateUserReq)     returns (User);
+    rpc GetUser(UserId)               returns (User);
+    rpc ListUsers(ListUsersReq)       returns (ListUsersResp);
+    rpc ListUsersMore(ListUsersMoreReq) returns (ListUsersMoreResp);
 }
 
-message User {
-    //id字段
-    int64	id = 1 ; // @gotags: json:"id"
-    //名称
-    string	name = 2 ; // @gotags: json:"name"
-    //年龄
-    int64	age = 3 ; // @gotags: json:"age"
-    //创建时间
-    string	ctime = 4 ; // @gotags: json:"ctime"
-    //更新时间
-    string	mtime = 5 ; // @gotags: json:"mtime"  
+message UpdateUserReq {
+    User            user  = 1;
+    repeated UserField masks = 2;  // enum field mask
 }
 
-enum UserField{
-    User_unknow = 0;
-    User_id = 1;
-    User_name = 2;
-    User_age = 3;
-    User_ctime = 4;
-    User_mtime = 5;   
+message ListUsersReq {
+    int32                  page          = 1;
+    int32                  page_size     = 2;
+    repeated UserOrderBy   orderbys      = 3;
+    repeated UserFilter    filters       = 4;
+    repeated UserField     select_fields = 5;
 }
-
-message UserId{
-    int64 id = 1 ; // @gotags: form:"id"
-}
-
-message UpdateUserReq{
-
-    User user = 1 ;
-
-    repeated string update_mask  = 2 ;
-}
-
-
-message ListUsersReq{
-    // number of page
-    int32 page = 1 ;// @gotags: form:"page"
-    // default 20
-    int32 page_size = 2 ;// @gotags: form:"page_size"
-    // order by field
-    UserField order_by_field = 3 ; // @gotags: form:"order_by_field"
-    // ASC DESC
-    bool order_by_desc = 4; //@gotags: form:"order_by_desc"
-     // filter
-    repeated UserFilter filters = 5 ; //@gotags: form:"filters"
-}
-
-message UserFilter{
-     UserField field = 1;
-    string op = 2;
-    string value = 3;
-}
-
-message ListUsersResp{
-
-    repeated User users = 1 ; // @gotags: json:"users"
-
-    int32 total_count = 2 ; // @gotags: json:"total_count"
-    
-    int32 page_count = 3 ; // @gotags: json:"page_count"
-}
-
-
-
 ```
-> Generate a proto message corresponding to the table structure, and the generated API file conforms to Google API design specification.
 
-### service example 
-user.service.go
+### Generated service (`user.service.go`)
+
+The skeleton implements all five gRPC methods. Key patterns:
+
 ```go
-package service
-
-import (
-	"context"
-	"github.com/goflower-io/crud/example/api"
-	"github.com/goflower-io/crud/example/crud"
-	"github.com/goflower-io/crud/example/crud/user"
-	"math"
-	"strings"
-	"time"
-
-	"github.com/goflower-io/xsql"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
-)
-
-// UserServiceImpl UserServiceImpl
-type UserServiceImpl struct {
-	api.UnimplementedUserServiceServer
-	Client *crud.Client
-}
-
-type IValidateUser interface {
-	ValidateUser(a *api.User) error
-}
-
-// CreateUser CreateUser
+// CreateUser — insert then read-after-write from master
 func (s *UserServiceImpl) CreateUser(ctx context.Context, req *api.User) (*api.User, error) {
-	if checker, ok := interface{}(s).(IValidateUser); ok {
-		if err := checker.ValidateUser(req); err != nil {
-			return nil, err
-		}
-	}
-
-	a := &user.User{
-		Id:    0,
-		Name:  req.GetName(),
-		Age:   req.GetAge(),
-		Ctime: time.Now(),
-		Mtime: time.Now(),
-	}
-	var err error
-	_, err = s.Client.User.
-		Create().
-		SetUser(a).
-		Save(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	// query after create and return
-	a2, err := s.Client.Master.User.
-		Find().
-		Where(
-			user.IdOp.EQ(a.Id),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return convertUser(a2), nil
+    a := &user.User{
+        Name:  req.GetName(),
+        Age:   req.GetAge(),
+        Sex:   req.GetSex(),
+        Ctime: time.Now(),
+        Mtime: time.Now(),
+    }
+    _, err := s.Client.User.Create().SetUser(a).Save(ctx)
+    if err != nil {
+        return nil, status.Error(codes.Internal, err.Error())
+    }
+    // read-after-write: force master
+    a2, err := s.Client.Master.User.Find().Where(user.IdOp.EQ(a.Id)).One(ctx)
+    if err != nil {
+        return nil, status.Error(codes.Internal, err.Error())
+    }
+    return convertUser(a2), nil
 }
 
-// DeleteUser DeleteUser
-func (s *UserServiceImpl) DeleteUser(ctx context.Context, req *api.UserId) (*emptypb.Empty, error) {
-	_, err := s.Client.User.
-		Delete().
-		Where(
-			user.IdOp.EQ(req.GetId()),
-		).
-		Exec(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return &emptypb.Empty{}, nil
-}
-
-// Updateuser UpdateUser
+// UpdateUser — enum field mask controls which fields are updated
 func (s *UserServiceImpl) UpdateUser(ctx context.Context, req *api.UpdateUserReq) (*api.User, error) {
-	if checker, ok := interface{}(s).(IValidateUser); ok {
-		if err := checker.ValidateUser(req.User); err != nil {
-			return nil, err
-		}
-	}
-	if len(req.GetUpdateMask()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "empty filter condition")
-	}
-	update := s.Client.User.Update()
-	for _, v := range req.GetUpdateMask() {
-		switch v {
-		case user.Name:
-			update.SetName(req.GetUser().GetName())
-		case user.Age:
-			update.SetAge(req.GetUser().GetAge())
-		case user.Ctime:
-			t, err := time.ParseInLocation("2006-01-02 15:04:05", req.GetUser().GetCtime(), time.Local)
-			if err != nil {
-				return nil, status.Error(codes.InvalidArgument, err.Error())
-			}
-			update.SetCtime(t)
-		case user.Mtime:
-			t, err := time.ParseInLocation("2006-01-02 15:04:05", req.GetUser().GetMtime(), time.Local)
-			if err != nil {
-				return nil, status.Error(codes.InvalidArgument, err.Error())
-			}
-			update.SetMtime(t)
-		}
-	}
-	_, err := update.
-		Where(
-			user.IdOp.EQ(req.GetUser().GetId()),
-		).
-		Save(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	// query after update and return
-	a, err := s.Client.Master.User.
-		Find().
-		Where(
-			user.IdOp.EQ(req.GetUser().GetId()),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	return convertUser(a), nil
+    if len(req.GetMasks()) == 0 {
+        return nil, status.Error(codes.InvalidArgument, "empty filter condition")
+    }
+    update := s.Client.User.Update()
+    for _, v := range req.GetMasks() {
+        switch v {
+        case api.UserField_User_name:
+            update.SetName(req.GetUser().GetName())
+        case api.UserField_User_age:
+            update.SetAge(req.GetUser().GetAge())
+        case api.UserField_User_sex:
+            update.SetSex(req.GetUser().GetSex())
+        }
+    }
+    _, err := update.Where(user.IdOp.EQ(req.GetUser().GetId())).Save(ctx)
+    // ...
 }
 
-// GetUser GetUser
-func (s *UserServiceImpl) GetUser(ctx context.Context, req *api.UserId) (*api.User, error) {
-	a, err := s.Client.User.
-		Find().
-		Where(
-			user.IdOp.EQ(req.GetId()),
-		).
-		One(ctx)
-	if err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
-	}
-	return convertUser(a), nil
-}
-
-// ListUsers ListUsers
+// ListUsers — dynamic filters + multi-column ordering + select fields
 func (s *UserServiceImpl) ListUsers(ctx context.Context, req *api.ListUsersReq) (*api.ListUsersResp, error) {
-	page := req.GetPage()
-	size := req.GetPageSize()
-	if size <= 0 {
-		size = 20
-	}
-	offset := size * (page - 1)
-	if offset < 0 {
-		offset = 0
-	}
-	finder := s.Client.User.
-		Find().
-		Offset(offset).
-		Limit(size)
+    finder := s.Client.User.Find().
+        Select(selectFields...).
+        Offset(offset).Limit(size)
 
-	if req.GetOrderByField() == api.UserField_User_unknow {
-		req.OrderByField = api.UserField_User_id
-	}
-	odb := strings.TrimPrefix(req.GetOrderByField().String(), "User_")
-	if req.GetOrderByDesc() {
-		finder.OrderDesc(odb)
-	} else {
-		finder.OrderAsc(odb)
-	}
-	counter := s.Client.User.
-		Find().
-		Count()
-
-	var ps []*xsql.Predicate
-	for _, v := range req.GetFilters() {
-		p, err := xsql.GenP(strings.TrimPrefix(v.Field.String(), "User_"), v.Op, v.Value)
-		if err != nil {
-			return nil, err
-		}
-		ps = append(ps, p)
-	}
-	if len(ps) > 0 {
-		p := xsql.And(ps...)
-		finder.WhereP(p)
-		counter.WhereP(p)
-	}
-	list, err := finder.All(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	count, err := counter.Int64(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	pageCount := int32(math.Ceil(float64(count) / float64(size)))
-
-	return &api.ListUsersResp{Users: convertUserList(list), TotalCount: int32(count), PageCount: pageCount}, nil
+    for _, v := range req.GetOrderbys() {
+        col := strings.TrimPrefix(v.GetField().String(), "User_")
+        if v.GetDesc() {
+            finder.OrderDesc(col)
+        } else {
+            finder.OrderAsc(col)
+        }
+    }
+    for _, v := range req.GetFilters() {
+        p, _ := xsql.GenP(strings.TrimPrefix(v.Field.String(), "User_"), v.Op, v.Val)
+        ps = append(ps, p)
+    }
+    if len(ps) > 0 {
+        finder.WhereP(xsql.And(ps...))
+    }
+    // ...
 }
+```
 
-func convertUser(a *user.User) *api.User {
-	return &api.User{
-		Id:    a.Id,
-		Name:  a.Name,
-		Age:   a.Age,
-		Ctime: a.Ctime.Format("2006-01-02 15:04:05"),
-		Mtime: a.Mtime.Format("2006-01-02 15:04:05"),
-	}
-}
+### Wire up with golib and test with grpcurl
 
-func convertUserList(list []*user.User) []*api.User {
-	ret := make([]*api.User, 0, len(list))
-	for _, v := range list {
-		ret = append(ret, convertUser(v))
-	}
-	return ret
-}
+```go
+import "github.com/goflower-io/golib/net/app"
 
+a := app.New(app.WithAddr("0.0.0.0", 8080))
+a.RegisteGrpcService(&api.UserService_ServiceDesc, &service.UserServiceImpl{Client: client})
+a.Run()
+```
+
+```bash
+# Install grpcurl
+go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+# List services (gRPC reflection is auto-registered by golib)
+grpcurl -plaintext localhost:8080 list
+
+# Describe UserService
+grpcurl -plaintext localhost:8080 describe UserService
+
+# Create a user
+grpcurl -plaintext \
+  -d '{"name":"alice","age":18,"sex":1}' \
+  localhost:8080 UserService/CreateUser
+
+# Get a user
+grpcurl -plaintext \
+  -d '{"id":1}' \
+  localhost:8080 UserService/GetUser
+
+# Update specific fields (masks use UserField enum: 2=name, 3=age, 4=sex)
+grpcurl -plaintext \
+  -d '{"user":{"id":1,"name":"bob","age":25,"sex":0},"masks":[2,3]}' \
+  localhost:8080 UserService/UpdateUser
+
+# List with pagination
+grpcurl -plaintext \
+  -d '{"page":1,"page_size":10}' \
+  localhost:8080 UserService/ListUsers
+
+# List with filter (age > 18), order by mtime desc, select id+name+age only
+grpcurl -plaintext \
+  -d '{
+    "page": 1,
+    "page_size": 10,
+    "filters":  [{"field":3,"op":"GT","val":"18"}],
+    "orderbys": [{"field":6,"desc":true}],
+    "select_fields": [1,2,3]
+  }' \
+  localhost:8080 UserService/ListUsers
+
+# Cursor-based pagination (no total count, better for large datasets)
+grpcurl -plaintext \
+  -d '{"page_size":5,"cursor":{"orderbys":[{"field":1,"desc":false}]}}' \
+  localhost:8080 UserService/ListUsersMore
+
+# Delete a user
+grpcurl -plaintext \
+  -d '{"id":1}' \
+  localhost:8080 UserService/DeleteUser
+```
+
+**UserField enum values:**
+
+| Value | Field |
+|---|---|
+| 1 | id |
+| 2 | name |
+| 3 | age |
+| 4 | sex |
+| 5 | ctime |
+| 6 | mtime |
+
+---
+
+## CLI Reference
 
 ```
-> The semi implementation code of the above service only needs to add some parameter verification, or automatically generate the message conversion code from the DB layer model structure to the API layer according to the code of the condition filter, which is convenient and flexible.
+Usage of crud:
+  -dialect string   database dialect: mysql | postgres | sqlite3  (default "mysql")
+  -protopkg string  Go package name for the generated proto go_package option
+  -service          also generate gRPC proto + service skeleton
+```
 
+---
 
+## Best Practices
 
-
-> The project is inspired by [facebook/ent](https://github.com/ent/ent) 
+1. Use `NOT NULL DEFAULT 0` for numeric columns and `NOT NULL DEFAULT ''` for strings — avoids NULL edge cases in generated code.
+2. Keep `.sql` files in version control alongside generated code — table schema changes become reviewable diffs.
+3. Use `client.Master.User.Find()` for read-after-write scenarios (e.g. return the created record).
+4. Use [golib](https://github.com/goflower-io/golib) `app.New()` to serve gRPC and HTTP on the same port with built-in recovery, structured logging, and Prometheus metrics.
