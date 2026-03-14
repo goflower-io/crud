@@ -6,6 +6,8 @@ import (
 {{if .ImportTime}}
 	"time"
 {{end}}
+    "maps"
+    "slices"
     "github.com/goflower-io/xsql"
 	"github.com/goflower-io/xsql/dialect"
 )
@@ -40,11 +42,11 @@ var columnsSet = map[string]struct{}{
     {{- end }}
 }
 
-func Columns() []string{
-    return columns
+func Columns() []string {
+	return slices.Clone(columns)
 }
 func ColumnsSet() map[string]struct{} {
-	return columnsSet
+	return maps.Clone(columnsSet)
 }
 
 
@@ -110,10 +112,10 @@ func (a *{{.GoTableName}}) SetAutoIncrPk(id int64) {
 }
 
 func (a *{{.GoTableName}}) Columns() []string {
-	return columns
+	return slices.Clone(columns)
 }
 func (a *{{.GoTableName}}) ColumnsSet() map[string]struct{} {
-	return columnsSet
+	return maps.Clone(columnsSet)
 }
 func (a *{{.GoTableName}})Schema()string{
 	return "{{.SchemaName}}"
