@@ -28,17 +28,10 @@ var clientGenericTmpl []byte
 //go:embed "internal/templates/sql_crud.tmpl"
 var genericTmpl []byte
 
-//go:embed "internal/templates/http.tmpl"
-var httpTmpl []byte
-
-//go:embed "internal/templates/view.tmpl"
-var viewTmpl []byte
-
 var (
 	database string
 	path     string
 	service  bool
-	http     bool
 	protopkg string
 	dialect  string
 )
@@ -55,7 +48,6 @@ func init() {
 		false,
 		"-service  generate GRPC proto message and service implementation",
 	)
-	flag.BoolVar(&http, "http", false, "-http  generate http handler and templ view")
 	flag.StringVar(&protopkg, "protopkg", "", "-protopkg  proto package field value")
 	flag.StringVar(
 		&dialect,
@@ -201,11 +193,6 @@ func generateService(tableObj *model.Table) {
 	}
 
 	generateFile(filepath.Join("service", pkgName+".service.go"), string(serviceTmpl), f, tableObj)
-	if http {
-		generateFile(filepath.Join("service", pkgName+".http.go"), string(httpTmpl), f, tableObj)
-		os.Mkdir(filepath.Join("views"), os.ModePerm)
-		generateFile(filepath.Join("views", pkgName+".templ"), string(viewTmpl), f, tableObj)
-	}
 }
 
 func generateFile(filename, tmpl string, f template.FuncMap, data interface{}) {
