@@ -3,8 +3,13 @@ package service
 import (
 	"context"
 	"math"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
-	{{if .ImportTime}}"time"{{end}}
+
+  {{if .ImportTime}}"time"{{end}}
 	"{{.RelativePath}}/crud"
 	"{{.RelativePath}}/crud/{{.PackageName}}"
 	"{{.RelativePath}}/api"
@@ -12,8 +17,7 @@ import (
 	"github.com/goflower-io/xsql"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
-
+	"google.golang.org/protobuf/proto"
 )
 {{ $pkgName := .PackageName}}
 {{ $tableName := .GoTableName}}
@@ -88,7 +92,7 @@ func (s *{{.GoTableName}}ServiceImpl) Create{{.GoTableName}}(ctx context.Context
 }
 
 // Delete{{.GoTableName}} Delete{{.GoTableName}}
-func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context, req *api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}}) (*emptypb.Empty, error) {
+func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context, req *api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}}) (*api.{{.GoTableName}}Empty, error) {
 	_, err := s.Client.{{.GoTableName}}.
 		Delete().
 		Where(
@@ -98,7 +102,7 @@ func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &emptypb.Empty{}, nil
+	return &api.{{.GoTableName}}Empty{}, nil
 }
 
 // Update{{.PackageName}} Update{{.GoTableName}}
@@ -186,16 +190,16 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}s(ctx context.Context,
 	if offset < 0 {
 		offset = 0
 	}
-	if len(req.GetFields()) == 0 {
+	if len(req.GetSelectFields()) == 0 {
 		for field := range api.{{.GoTableName}}Field_name {
 			if field > 0 {
-				req.Fields = append(req.Fields, api.{{.GoTableName}}Field(field))
+				req.SelectFields = append(req.SelectFields, api.{{.GoTableName}}Field(field))
 			}
 		}
 	}
 
-  selectFields := make([]string,0,len(req.GetFields()))
-  for _,v := range req.GetFields(){
+  selectFields := make([]string,0,len(req.GetSelectFields()))
+  for _,v := range req.GetSelectFields(){
     selectFields = append(selectFields,strings.TrimPrefix(v.String(),"{{.GoTableName}}_"))
   }
 	finder := s.Client.{{.GoTableName}}.
@@ -204,14 +208,13 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}s(ctx context.Context,
 		Offset(offset).
 		Limit(size)
 
-	if req.GetOrderby() == api.{{.GoTableName}}Field_{{.GoTableName}}_unknow {
-		req.Orderby = api.{{.GoTableName}}Field_{{.GoTableName}}_{{.PrimaryKey.ColumnName}}
-	}
-	odb := strings.TrimPrefix(req.GetOrderby().String(), "{{.GoTableName}}_")
-	if req.GetDesc() {
-		finder.OrderDesc(odb)
-	} else {
-		finder.OrderAsc(odb)
+	for _, v := range req.GetOrderbys() {
+		odb := strings.TrimPrefix(v.GetField().String(), "{{.GoTableName}}_")
+		if v.GetDesc() {
+			finder.OrderDesc(odb)
+		} else {
+			finder.OrderAsc(odb)
+		}
 	}
 	counter := s.Client.{{.GoTableName}}.
 		Find().
@@ -243,6 +246,148 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}s(ctx context.Context,
 	return &api.List{{.GoTableName}}sResp{ {{.GoTableName}}s: convert{{.GoTableName}}List(list), TotalCount: int32(count), PageCount: pageCount,PageSize:size,Page:page}, nil
 }
 
+func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}sMore(ctx context.Context, req *api.List{{.GoTableName}}sMoreReq) (*api.List{{.GoTableName}}sMoreResp, error) {
+
+	size := req.GetPageSize()
+	if size <= 0 {
+		size = 20
+	}
+	firstPage := req.GetPageToken() == ""
+	cursor := req.GetCursor()
+	if !firstPage {
+		data, err := base64.URLEncoding.DecodeString(req.GetPageToken())
+		if err != nil {
+			return nil, err
+		}
+		var c api.{{.GoTableName}}Cursor
+		if proto.Unmarshal(data, &c) != nil {
+			return nil, err
+		}
+		cursor = &c
+	}
+	if cursor == nil {
+		return nil, errors.New("cursor error")
+	}
+	selectFields := cursor.GetSelectFields()
+	orderbys := cursor.GetOrderbys()
+	filters := cursor.GetFilters()
+	if firstPage {
+		orderbyHasPrimeKey := slices.ContainsFunc(orderbys, func(o *api.{{.GoTableName}}OrderBy) bool {
+			return o.GetField() == api.{{.GoTableName}}Field_{{.GoTableName}}_{{.PrimaryKey.ColumnName}}
+		})
+		if !orderbyHasPrimeKey {
+			orderbys = append(orderbys, &api.{{.GoTableName}}OrderBy{Field: api.{{.GoTableName}}Field_{{.GoTableName}}_{{.PrimaryKey.ColumnName}}, Desc: true})
+		}
+
+		if len(selectFields) != 0 {
+			for _, v := range orderbys {
+				selectFieldHasOrderByFields := slices.ContainsFunc(selectFields, func(o api.{{.GoTableName}}Field) bool {
+					return o == v.GetField()
+				})
+				if !selectFieldHasOrderByFields {
+					selectFields = append(selectFields, v.GetField())
+				}
+			}
+		}
+		if len(selectFields) == 0 {
+			for field := range api.{{.GoTableName}}Field_name {
+				if field > 0 {
+					selectFields = append(selectFields, api.{{.GoTableName}}Field(field))
+				}
+			}
+		}
+	}
+	selectFieldsStr := make([]string, 0, len(selectFields))
+	for _, v := range selectFields {
+		selectFieldsStr = append(selectFieldsStr, strings.TrimPrefix(v.String(), "{{.GoTableName}}_"))
+	}
+	finder := s.Client.{{.GoTableName}}.
+		Find().
+		Select(selectFieldsStr...).
+		Limit(size + 1)
+	for _, v := range orderbys {
+		odb := strings.TrimPrefix(v.GetField().String(), "{{.GoTableName}}_")
+		if v.GetDesc() {
+			finder.OrderDesc(odb)
+		} else {
+			finder.OrderAsc(odb)
+		}
+	}
+	var ps []*xsql.Predicate
+	for _, v := range cursor.GetFilters() {
+		p, err := xsql.GenP(strings.TrimPrefix(v.Field.String(), "{{.GoTableName}}_"), v.Op, v.Val)
+		if err != nil {
+			return nil, err
+		}
+		ps = append(ps, p)
+	}
+	if len(ps) > 0 {
+		p := xsql.And(ps...)
+		finder.WhereP(p)
+	}
+	if !firstPage {
+		var psOr []*xsql.Predicate
+		for _, v := range cursor.GetNextPageFilters() {
+			var ps []*xsql.Predicate
+			for _, v2 := range v.GetFilters() {
+				p, err := xsql.GenP(strings.TrimPrefix(v2.Field.String(), "{{.GoTableName}}_"), v2.Op, v2.Val)
+				if err != nil {
+					return nil, err
+				}
+				ps = append(ps, p)
+			}
+			if len(ps) > 0 {
+				p := xsql.And(ps...)
+				psOr = append(psOr, p)
+			}
+		}
+		if len(psOr) > 0 {
+			p := xsql.Or(psOr...)
+			finder.WhereP(p)
+		}
+	}
+	list, err := finder.All(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if len(list) <= int(size) {
+		return &api.List{{.GoTableName}}sMoreResp{Users: convert{{.GoTableName}}List(list), NextPageToken: ""}, nil
+	}
+
+	// (ctime < ?)
+	// OR (ctime = ? AND name > ?)
+	// OR (ctime = ? AND name = ? AND id < ?)
+	last := list[len(list)-1]
+	nextPageFilters := []*api.{{.GoTableName}}FilterOr{}
+	nextpageEqFilters := []*api.{{.GoTableName}}Filter{}
+	for _, v := range orderbys {
+		filterOr := &api.{{.GoTableName}}FilterOr{}
+		f := &api.{{.GoTableName}}Filter{
+			Field: v.GetField(),
+		}
+		if v.Desc {
+			f.Op = "<="
+		} else {
+			f.Op = ">="
+		}
+		x, ok := xsql.GetFieldByJSONTag(last, strings.TrimPrefix(v.Field.String(), "{{.GoTableName}}_"))
+		if !ok {
+			fmt.Println("contineu")
+			continue
+		}
+		f.Val = fmt.Sprintf("%v", x)
+		filterOr.Filters = append(filterOr.Filters, nextpageEqFilters...)
+		filterOr.Filters = append(filterOr.Filters, f)
+		nextPageFilters = append(nextPageFilters, filterOr)
+		fEq := &api.{{.GoTableName}}Filter{Field: v.GetField(), Op: "=", Val: f.Val}
+		nextpageEqFilters = append(nextpageEqFilters, fEq)
+	}
+	nextcursor := &api.{{.GoTableName}}Cursor{NextPageFilters: nextPageFilters, Orderbys: orderbys, Filters: filters, SelectFields: selectFields}
+	cursorData, _ := proto.Marshal(nextcursor)
+	token := base64.URLEncoding.EncodeToString(cursorData)
+	list2 := list[:len(list)-1]
+	return &api.List{{.GoTableName}}sMoreResp{Users: convert{{.GoTableName}}List(list2), NextPageToken: token, HasMore: true}, nil
+}
 func convert{{.GoTableName}}(a *{{.PackageName}}.{{.GoTableName}}) *api.{{.GoTableName}} {
 	return &api.{{.GoTableName}}{
 		{{- range $index,$field := .Fields }}

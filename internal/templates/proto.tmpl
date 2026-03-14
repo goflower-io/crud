@@ -6,14 +6,14 @@ package {{.Protopkg}};
 {{- end}}
 option go_package = "/api";
 {{ $tableName := .GoTableName}}
-import "google/protobuf/empty.proto";
 
 service {{.GoTableName}}Service { 
     rpc Create{{.GoTableName}}({{.GoTableName}})returns({{.GoTableName}});
-    rpc Delete{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns(google.protobuf.Empty);
+    rpc Delete{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns({{.GoTableName}}Empty);
     rpc Update{{.GoTableName}}(Update{{.GoTableName}}Req)returns({{.GoTableName}});
     rpc Get{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns({{.GoTableName}});
     rpc List{{.GoTableName}}s(List{{.GoTableName}}sReq)returns(List{{.GoTableName}}sResp);
+    rpc List{{.GoTableName}}sMore(List{{.GoTableName}}sMoreReq)returns(List{{.GoTableName}}sMoreResp);
 }
 
 message {{.GoTableName}} {
@@ -35,25 +35,33 @@ message {{.GoTableName}}{{.PrimaryKey.GoColumnName}}{
     {{.PrimaryKey.ProtoType}} {{.PrimaryKey.ColumnName}} = 1 ; 
 }
 
+message {{.GoTableName}}Empty{}
 message Update{{.GoTableName}}Req{
     {{.GoTableName}} {{.TableName}} = 1 ;
     repeated {{.GoTableName}}Field masks  = 2 ;
+}
+
+message {{.GoTableName}}OrderBy {
+  {{.GoTableName}}Field field = 1;
+  bool desc = 2;
+} 
+message {{.GoTableName}}FilterOr{
+ repeated {{.GoTableName}}Filter filters = 1;
+}
+message {{.GoTableName}}Filter{
+    {{.GoTableName}}Field field = 1;
+    string op = 2;
+    string val = 3;
 }
 
 
 message List{{.GoTableName}}sReq{
     int32 page = 1 ;
     int32 page_size = 2 ;
-    {{.GoTableName}}Field orderby = 3 ; 
-    bool desc = 4; 
-    repeated {{.GoTableName}}Filter filters = 5 ; 
-    repeated {{.GoTableName}}Field fields = 6; 
-}
+    repeated {{.GoTableName}}OrderBy orderbys = 3 ; 
+    repeated {{.GoTableName}}Filter filters = 4 ; 
+    repeated {{.GoTableName}}Field  select_fields = 5; 
 
-message {{.GoTableName}}Filter{
-     {{.GoTableName}}Field field = 1;
-    string op = 2;
-    string val = 3;
 }
 
 message List{{.GoTableName}}sResp{
@@ -63,3 +71,22 @@ message List{{.GoTableName}}sResp{
     int32 page_size = 4;
     int32 page = 5;
 }
+
+
+message {{.GoTableName}}Cursor{
+    repeated {{.GoTableName}}FilterOr next_page_filters = 1 ; 
+    repeated {{.GoTableName}}OrderBy orderbys = 2 ; 
+    repeated {{.GoTableName}}Filter filters = 3 ; 
+    repeated {{.GoTableName}}Field select_fields = 4; 
+}
+
+message List{{.GoTableName}}sMoreReq{
+    string page_token = 1;  
+    int32 page_size = 2 ;
+    {{.GoTableName}}Cursor cursor = 3;
+}
+message List{{.GoTableName}}sMoreResp{
+    string next_page_token = 1;
+    repeated {{.GoTableName}} {{.TableName}}s = 2 ; 
+    bool has_more = 3;
+} 
