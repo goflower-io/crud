@@ -333,9 +333,6 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}sMore(ctx context.Cont
 		return &api.List{{.GoTableName}}sMoreResp{Users: convert{{.GoTableName}}List(list), NextPageToken: ""}, nil
 	}
 
-	// (ctime < ?)
-	// OR (ctime = ? AND name > ?)
-	// OR (ctime = ? AND name = ? AND id < ?)
 	last := list[len(list)-1]
 	nextPageFilters := []*api.{{.GoTableName}}FilterOr{}
 	nextpageEqFilters := []*api.{{.GoTableName}}Filter{}
