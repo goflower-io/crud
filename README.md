@@ -1,6 +1,6 @@
 # crud — Code Generation ORM for Go
 
-**Design your table, get your code.** crud generates type-safe, high-performance CRUD code from SQL DDL for MySQL, MariaDB, PostgreSQL, SQLite3, and MongoDB.
+**Design your table, get your code.** crud generates type-safe, high-performance CRUD code from SQL DDL for MySQL, MariaDB, PostgreSQL, and SQLite3.
 
 > Inspired by [facebook/ent](https://github.com/ent/ent)
 

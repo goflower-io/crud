@@ -1,6 +1,6 @@
 # crud — Go 语言 ORM 代码生成工具
 
-**设计好表结构，剩下的交给 crud。** 从 SQL DDL 自动生成类型安全、高性能的 CRUD 代码，支持 MySQL、MariaDB、PostgreSQL、SQLite3 和 MongoDB。
+**设计好表结构，剩下的交给 crud。** 从 SQL DDL 自动生成类型安全、高性能的 CRUD 代码，支持 MySQL、MariaDB、PostgreSQL 和 SQLite3。
 
 > 灵感来自 [facebook/ent](https://github.com/ent/ent)
 
