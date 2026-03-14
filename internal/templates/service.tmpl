@@ -9,7 +9,10 @@ import (
 	"slices"
 	"strings"
 
-  {{if .ImportTime}}"time"{{end}}
+  {{if .ImportTime}}
+  "time"
+	"google.golang.org/protobuf/types/known/timestamppb"
+  {{end}}
 	"{{.RelativePath}}/crud"
 	"{{.RelativePath}}/crud/{{.PackageName}}"
 	"{{.RelativePath}}/api"
@@ -18,6 +21,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 )
 {{ $pkgName := .PackageName}}
 {{ $tableName := .GoTableName}}
@@ -51,26 +56,13 @@ func (s *{{.GoTableName}}ServiceImpl) Create{{.GoTableName}}(ctx context.Context
 			{{- else}}
 				{{- if eq .IsDefaultCurrentTimestamp true}}	
 					{{$field.GoColumnName}}:time.Now(),
-				{{- end}}
+				{{- else }}
+					{{$field.GoColumnName}}:req.Get{{$field.GoColumnName}}().AsTime(),
+        {{- end}}
 			{{- end}}  
 		{{- end}}  
 	}
 	var err error
-	{{- range $index,$field := .Fields }}
-			{{- if eq .GoColumnType  "time.Time"}}
-				{{- if eq .IsDefaultCurrentTimestamp false}}
-					{{- if eq $field.DataType "date"}}
-						if a.{{$field.GoColumnName}}, err = time.ParseInLocation("2006-01-02", req.Get{{$field.GoColumnName}}(), time.Local); err != nil {
-							return nil, err
-						}
-					{{- else }}
-						if a.{{$field.GoColumnName}}, err = time.ParseInLocation("2006-01-02 15:04:05", req.Get{{$field.GoColumnName}}(), time.Local); err != nil {
-							return nil, err
-						}
-					{{- end}}
-				{{- end}}
-			{{- end}}  
-	{{- end}}  
 	_, err = s.Client.{{.GoTableName}}.
 		Create().
 		Set{{.GoTableName}}(a).
@@ -92,7 +84,7 @@ func (s *{{.GoTableName}}ServiceImpl) Create{{.GoTableName}}(ctx context.Context
 }
 
 // Delete{{.GoTableName}} Delete{{.GoTableName}}
-func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context, req *api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}}) (*api.{{.GoTableName}}Empty, error) {
+func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context, req *api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}}) (*emptypb.Empty, error) {
 	_, err := s.Client.{{.GoTableName}}.
 		Delete().
 		Where(
@@ -102,7 +94,7 @@ func (s *{{.GoTableName}}ServiceImpl) Delete{{.GoTableName}}(ctx context.Context
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	return &api.{{.GoTableName}}Empty{}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // Update{{.PackageName}} Update{{.GoTableName}}
@@ -119,23 +111,10 @@ func (s *{{.GoTableName}}ServiceImpl) Update{{.GoTableName}}(ctx context.Context
 	for _, v := range req.GetMasks() {
 		switch v {	
 		{{- range $index,$field := .Fields }}
-		
 			{{- if eq $field.IsPrimaryKey false}}
 				case api.{{$tableName}}Field_{{$tableName}}_{{$field.ColumnName}}:
 				{{- if eq .GoColumnType  "time.Time"}}
-					{{- if eq $field.DataType "date" }}
-						t, err := time.ParseInLocation("2006-01-02", req.Get{{$tableName}}().Get{{$field.GoColumnName}}(), time.Local)
-						if err != nil {
-							return nil, status.Error(codes.InvalidArgument, err.Error())
-						}
-						update.Set{{$field.GoColumnName}}(t)
-					{{- else }}
-						t, err := time.ParseInLocation("2006-01-02 15:04:05", req.Get{{$tableName}}().Get{{$field.GoColumnName}}(), time.Local)
-						if err != nil {
-							return nil, status.Error(codes.InvalidArgument, err.Error())
-						}
-						update.Set{{$field.GoColumnName}}(t)
-					{{- end }}
+						update.Set{{$field.GoColumnName}}(req.Get{{$tableName}}().Get{{$field.GoColumnName}}().AsTime())
 				{{- else}}
 				update.Set{{$field.GoColumnName}}(req.Get{{$tableName}}().Get{{$field.GoColumnName}}())	
 				{{- end}}
@@ -392,11 +371,7 @@ func convert{{.GoTableName}}(a *{{.PackageName}}.{{.GoTableName}}) *api.{{.GoTab
 	return &api.{{.GoTableName}}{
 		{{- range $index,$field := .Fields }}
 		{{- if eq .GoColumnType  "time.Time"}}
-			{{- if eq .DataType "date"}}
-			{{$field.GoColumnName}}:a.{{$field.GoColumnName}}.Format("2006-01-02"),
-			{{- else}}
-			{{$field.GoColumnName}}:a.{{$field.GoColumnName}}.Format("2006-01-02 15:04:05"),
-			{{- end}} 
+			{{$field.GoColumnName}}: timestamppb.New(a.{{$field.GoColumnName}}),
 		{{- else}}
 			{{$field.GoColumnName}}:a.{{$field.GoColumnName}},
 		{{- end}}	

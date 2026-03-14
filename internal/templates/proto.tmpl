@@ -7,9 +7,13 @@ package {{.Protopkg}};
 option go_package = "/api";
 {{ $tableName := .GoTableName}}
 
+import "google/protobuf/empty.proto";
+{{if .ImportTime}}
+import "google/protobuf/timestamp.proto";
+{{end}}
 service {{.GoTableName}}Service { 
     rpc Create{{.GoTableName}}({{.GoTableName}})returns({{.GoTableName}});
-    rpc Delete{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns({{.GoTableName}}Empty);
+    rpc Delete{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns(google.protobuf.Empty);
     rpc Update{{.GoTableName}}(Update{{.GoTableName}}Req)returns({{.GoTableName}});
     rpc Get{{.GoTableName}}({{.GoTableName}}{{.PrimaryKey.GoColumnName}})returns({{.GoTableName}});
     rpc List{{.GoTableName}}s(List{{.GoTableName}}sReq)returns(List{{.GoTableName}}sResp);
@@ -35,7 +39,6 @@ message {{.GoTableName}}{{.PrimaryKey.GoColumnName}}{
     {{.PrimaryKey.ProtoType}} {{.PrimaryKey.ColumnName}} = 1 ; 
 }
 
-message {{.GoTableName}}Empty{}
 message Update{{.GoTableName}}Req{
     {{.GoTableName}} {{.TableName}} = 1 ;
     repeated {{.GoTableName}}Field masks  = 2 ;

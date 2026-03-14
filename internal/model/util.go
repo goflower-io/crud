@@ -52,7 +52,7 @@ func GoTypeToProtoType(g string) string {
 	case "[]uint64", "uint64":
 		return "uint64"
 	case "[]time.Time", "time.Time":
-		return "string"
+		return "google.protobuf.Timestamp"
 	default:
 		return ""
 	}
