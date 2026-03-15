@@ -2,10 +2,9 @@
 package service
 
 import (
-	"encoding/json"
 	"net/http"
 
-	h1 "github.com/goflower-io/golib/net/http"
+	"github.com/goflower-io/golib/net/app"
 
 	"{{.RelativePath}}/api"
 	"{{.RelativePath}}/views"
@@ -14,149 +13,280 @@ import (
 {{ $pkgName := .PackageName}}
 {{ $tableName := .GoTableName}}
 
+// {{.GoTableName}}Handler wraps {{.GoTableName}}ServiceServer with HTTP handlers.
+// It supports middleware chains and flexible response types (JSON, HTML, HTMX)
+// via github.com/goflower-io/golib/net/app.
+//
+// Quick start:
+//
+//	h := New{{.GoTableName}}Handler(svc)
+//	h.Middlewares = append(h.Middlewares, app.RecoveryMiddle, app.LogMidddle)
+//	h.AddPath(func(method, path string, hf http.HandlerFunc) {
+//	    mux.HandleFunc(method+" "+path, hf)
+//	})
+//
+// Response format is negotiated per-request via Accept / HX-Request headers:
+//
+//	Accept: application/json  → JSON envelope  (app.ResponseJSON)
+//	HX-Request: true          → HTMX fragment  (app.ResponseHTMX)
+//	(default)                 → full HTML page (app.ResponseHTML)
 type {{.GoTableName}}Handler struct {
 	api.{{.GoTableName}}ServiceServer
-	Error   func(w http.ResponseWriter, statusCode int, err error)
-	Success func(w http.ResponseWriter, msg string)
+
+	// Middlewares are applied to every route in registration order
+	// (first element is outermost / executes first).
+	// Compatible with app.RecoveryMiddle and app.LogMidddle.
+	Middlewares []func(http.HandlerFunc) http.HandlerFunc
+
+	// OnError writes an error response. Override to customise the format.
+	// Default: JSON error envelope for API callers, plain text otherwise.
+	OnError func(w http.ResponseWriter, r *http.Request, statusCode int, err error)
+
+	// OnSuccess writes a success response for mutation operations (Create/Update/Delete).
+	// Default: JSON {"message":"..."} for API callers, plain text for HTML callers.
+	OnSuccess func(w http.ResponseWriter, r *http.Request, msg string)
 }
 
+// New{{.GoTableName}}Handler creates a {{.GoTableName}}Handler with sensible defaults.
 func New{{.GoTableName}}Handler(s api.{{.GoTableName}}ServiceServer) *{{.GoTableName}}Handler {
 	h := &{{.GoTableName}}Handler{
 		{{.GoTableName}}ServiceServer: s,
-		Error: func(w http.ResponseWriter, statusCode int, err error) {
-			w.WriteHeader(statusCode)
-			w.Write([]byte(err.Error()))
-		},
-		Success: func(w http.ResponseWriter, msg string) {
-			w.Write([]byte(msg))
-		},
+	}
+	h.OnError = func(w http.ResponseWriter, r *http.Request, statusCode int, err error) {
+		wr := app.NewWriter(w, r)
+		switch app.ResponseConentType(r) {
+		case app.ResponseJSON:
+			wr.JSONErr(app.NewError(statusCode, err.Error()))
+		default:
+			wr.Text(statusCode, err.Error())
+		}
+	}
+	h.OnSuccess = func(w http.ResponseWriter, r *http.Request, msg string) {
+		wr := app.NewWriter(w, r)
+		switch app.ResponseConentType(r) {
+		case app.ResponseJSON:
+			wr.JSONOk(map[string]string{"message": msg})
+		default:
+			wr.Text(http.StatusOK, msg)
+		}
 	}
 	return h
 }
 
-func (h *{{.GoTableName}}Handler) AddPath(addPathFn func(method, path string, hf http.HandlerFunc)) {
-	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Create{{.GoTableName}}_FullMethodName, h.Create{{.GoTableName}}Handle)
-	addPathFn(http.MethodPut, api.{{.GoTableName}}Service_Create{{.GoTableName}}_FullMethodName, h.Create{{.GoTableName}}Handle)
-
-	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Get{{.GoTableName}}_FullMethodName, h.Get{{.GoTableName}}Handle)
-	addPathFn(http.MethodDelete, api.{{.GoTableName}}Service_Delete{{.GoTableName}}_FullMethodName, h.Delete{{.GoTableName}}Handle)
-
-	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Update{{.GoTableName}}_FullMethodName, h.Update{{.GoTableName}}Handle)
-	addPathFn(http.MethodPost, api.{{.GoTableName}}Service_Update{{.GoTableName}}_FullMethodName, h.Update{{.GoTableName}}Handle)
-
-	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_List{{.GoTableName}}s_FullMethodName, h.List{{.GoTableName}}sHandle)
+// applyMiddlewares wraps fn with all configured middlewares.
+// The first element of Middlewares is the outermost wrapper.
+func (h *{{.GoTableName}}Handler) applyMiddlewares(fn http.HandlerFunc) http.HandlerFunc {
+	for i := len(h.Middlewares) - 1; i >= 0; i-- {
+		fn = h.Middlewares[i](fn)
+	}
+	return fn
 }
+
+// AddPath registers all CRUD routes using the provided addPathFn.
+// Configured middlewares are applied to each route.
+//
+// Example with stdlib mux:
+//
+//	h.AddPath(func(method, path string, hf http.HandlerFunc) {
+//	    mux.HandleFunc(method+" "+path, hf)
+//	})
+func (h *{{.GoTableName}}Handler) AddPath(addPathFn func(method, path string, hf http.HandlerFunc)) {
+	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Create{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Create{{.GoTableName}}Handle))
+	addPathFn(http.MethodPut, api.{{.GoTableName}}Service_Create{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Create{{.GoTableName}}Handle))
+
+	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Get{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Get{{.GoTableName}}Handle))
+	addPathFn(http.MethodDelete, api.{{.GoTableName}}Service_Delete{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Delete{{.GoTableName}}Handle))
+
+	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_Update{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Update{{.GoTableName}}Handle))
+	addPathFn(http.MethodPost, api.{{.GoTableName}}Service_Update{{.GoTableName}}_FullMethodName, h.applyMiddlewares(h.Update{{.GoTableName}}Handle))
+
+	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_List{{.GoTableName}}s_FullMethodName, h.applyMiddlewares(h.List{{.GoTableName}}sHandle))
+	addPathFn(http.MethodGet, api.{{.GoTableName}}Service_List{{.GoTableName}}sMore_FullMethodName, h.applyMiddlewares(h.List{{.GoTableName}}sMoreHandle))
+}
+
+// ─────────────────────────────────────────────
+// ListMore (cursor-based infinite scroll)
+// ─────────────────────────────────────────────
+
+func (h *{{.GoTableName}}Handler) List{{.GoTableName}}sMoreHandle(w http.ResponseWriter, req *http.Request) {
+	reqb := new(api.List{{.GoTableName}}sMoreReq)
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
+		return
+	}
+	// First page: ensure a default cursor so the service can establish ordering.
+	if reqb.GetPageToken() == "" && reqb.GetCursor() == nil {
+		reqb.Cursor = &api.{{.GoTableName}}Cursor{}
+	}
+	if reqb.GetPageSize() <= 0 {
+		reqb.PageSize = 20
+	}
+	resp, err := h.{{.GoTableName}}ServiceServer.List{{.GoTableName}}sMore(req.Context(), reqb)
+	if err != nil {
+		h.OnError(w, req, http.StatusInternalServerError, err)
+		return
+	}
+	wr := app.NewWriter(w, req)
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		wr.JSONOk(resp)
+	case app.ResponseHTMX:
+		wr.TemplFragment(views.{{.GoTableName}}ListMoreView(resp, req.URL.Path, reqb.GetPageSize()))
+	default:
+		wr.TemplOk(views.{{.GoTableName}}ListMorePage(resp, req.URL.Path, reqb.GetPageSize()))
+	}
+}
+
+// ─────────────────────────────────────────────
+// List
+// ─────────────────────────────────────────────
 
 func (h *{{.GoTableName}}Handler) List{{.GoTableName}}sHandle(w http.ResponseWriter, req *http.Request) {
 	reqb := new(api.List{{.GoTableName}}sReq)
-	if err := h1.GetRequestParams(reqb, req); err != nil {
-		h.Error(w, http.StatusBadRequest, err)
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
 		return
 	}
 	resp, err := h.{{.GoTableName}}ServiceServer.List{{.GoTableName}}s(req.Context(), reqb)
 	if err != nil {
-		h.Error(w, http.StatusInternalServerError, err)
+		h.OnError(w, req, http.StatusInternalServerError, err)
 		return
 	}
-	switch h1.ResponseConentType(req) {
-	case h1.ResponseJSON:
-		d, _ := json.Marshal(resp)
-		w.Write(d)
-	case h1.ResponseHTMX:
-		views.{{.GoTableName}}ListView(resp,req.URL.Path,req.Form).Render(req.Context(), w)
-	case h1.ResponseHTML:
-		views.{{.GoTableName}}ListPage(resp,req.URL.Path,req.Form).Render(req.Context(), w)
+	wr := app.NewWriter(w, req)
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		wr.JSONOk(resp)
+	case app.ResponseHTMX:
+		wr.TemplFragment(views.{{.GoTableName}}ListView(resp, req.URL.Path, req.Form))
+	default:
+		wr.TemplOk(views.{{.GoTableName}}ListPage(resp, req.URL.Path, req.Form))
 	}
 }
 
+// ─────────────────────────────────────────────
+// Get
+// ─────────────────────────────────────────────
+
 func (h *{{.GoTableName}}Handler) Get{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
-	reqb := new(api.{{.GoTableName}}Id)
-	if err := h1.GetRequestParams(reqb, req); err != nil {
-		h.Error(w, http.StatusBadRequest, err)
+	reqb := new(api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}})
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
 		return
 	}
 	resp, err := h.{{.GoTableName}}ServiceServer.Get{{.GoTableName}}(req.Context(), reqb)
 	if err != nil {
-		h.Error(w, http.StatusInternalServerError, err)
+		h.OnError(w, req, http.StatusInternalServerError, err)
 		return
 	}
-	switch h1.ResponseConentType(req) {
-	case h1.ResponseJSON:
-		d, _ := json.Marshal(resp)
-		w.Write(d)
-	case h1.ResponseHTMX:
-		views.{{.GoTableName}}DetailView(resp).Render(req.Context(), w)
-	case h1.ResponseHTML:
-		views.{{.GoTableName}}DetailPage(resp).Render(req.Context(), w)
+	wr := app.NewWriter(w, req)
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		wr.JSONOk(resp)
+	case app.ResponseHTMX:
+		wr.TemplFragment(views.{{.GoTableName}}DetailView(resp))
+	default:
+		wr.TemplOk(views.{{.GoTableName}}DetailPage(resp))
 	}
 }
 
-func (h *{{.GoTableName}}Handler) Update{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
-	if req.Method == http.MethodGet {
-		reqb := new(api.{{.GoTableName}}Id)
-		if err := h1.GetRequestParams(reqb, req); err != nil {
-			h.Error(w, http.StatusBadRequest, err)
-			return
-		}
-		resp, err := h.{{.GoTableName}}ServiceServer.Get{{.GoTableName}}(req.Context(), reqb)
-		if err != nil {
-			h.Error(w, http.StatusInternalServerError, err)
-			return
-		}
-		switch h1.ResponseConentType(req) {
-		case h1.ResponseHTMX:
-			views.{{.GoTableName}}UpdateView(resp).Render(req.Context(), w)
-		default:
-			views.{{.GoTableName}}UpdatePage(resp).Render(req.Context(), w)
-		}
-		return
-	}
-	reqb := new(api.Update{{.GoTableName}}Req)
-	if err := h1.GetRequestParams(reqb, req); err != nil {
-		h.Error(w, http.StatusBadRequest, err)
-		return
-	}
-	_, err := h.{{.GoTableName}}ServiceServer.Update{{.GoTableName}}(req.Context(), reqb)
-	if err != nil {
-		h.Error(w, http.StatusInternalServerError, err)
-		return
-	}
-	h.Success(w, "{{.GoTableName}} Updated")
-}
-
-func (h *{{.GoTableName}}Handler) Delete{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
-	reqb := new(api.{{.GoTableName}}Id)
-	if err := h1.GetRequestParams(reqb, req); err != nil {
-		h.Error(w, http.StatusBadRequest, err)
-		return
-	}
-	_, err := h.{{.GoTableName}}ServiceServer.Delete{{.GoTableName}}(req.Context(), reqb)
-	if err != nil {
-		h.Error(w, http.StatusInternalServerError, err)
-		return
-	}
-	h.Success(w, "{{.GoTableName}} Deleted")
-}
+// ─────────────────────────────────────────────
+// Create  (GET → show form, PUT → create record)
+// ─────────────────────────────────────────────
 
 func (h *{{.GoTableName}}Handler) Create{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
+	wr := app.NewWriter(w, req)
 	if req.Method == http.MethodGet {
-		switch h1.ResponseConentType(req) {
-		case h1.ResponseHTMX:
-			views.{{.GoTableName}}CreateView().Render(req.Context(), w)
+		switch app.ResponseConentType(req) {
+		case app.ResponseHTMX:
+			wr.TemplFragment(views.{{.GoTableName}}CreateView())
 		default:
-			views.{{.GoTableName}}CreatePage().Render(req.Context(), w)
+			wr.TemplOk(views.{{.GoTableName}}CreatePage())
 		}
 		return
 	}
 	reqb := new(api.{{.GoTableName}})
-	if err := h1.GetRequestParams(reqb, req); err != nil {
-		h.Error(w, http.StatusBadRequest, err)
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
 		return
 	}
-	_, err := h.{{.GoTableName}}ServiceServer.Create{{.GoTableName}}(req.Context(), reqb)
+	resp, err := h.{{.GoTableName}}ServiceServer.Create{{.GoTableName}}(req.Context(), reqb)
 	if err != nil {
-		h.Error(w, http.StatusInternalServerError, err)
+		h.OnError(w, req, http.StatusInternalServerError, err)
 		return
 	}
-	h.Success(w, "{{.GoTableName}} Created")
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		wr.JSON(http.StatusCreated, resp)
+	default:
+		h.OnSuccess(w, req, "{{.GoTableName}} Created")
+	}
+}
+
+// ─────────────────────────────────────────────
+// Update  (GET → show form, POST → update record)
+// ─────────────────────────────────────────────
+
+func (h *{{.GoTableName}}Handler) Update{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
+	wr := app.NewWriter(w, req)
+	if req.Method == http.MethodGet {
+		reqb := new(api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}})
+		if err := app.GetRequestParams(reqb, req); err != nil {
+			h.OnError(w, req, http.StatusBadRequest, err)
+			return
+		}
+		resp, err := h.{{.GoTableName}}ServiceServer.Get{{.GoTableName}}(req.Context(), reqb)
+		if err != nil {
+			h.OnError(w, req, http.StatusInternalServerError, err)
+			return
+		}
+		switch app.ResponseConentType(req) {
+		case app.ResponseHTMX:
+			wr.TemplFragment(views.{{.GoTableName}}UpdateView(resp))
+		default:
+			wr.TemplOk(views.{{.GoTableName}}UpdatePage(resp))
+		}
+		return
+	}
+	reqb := new(api.Update{{.GoTableName}}Req)
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := h.{{.GoTableName}}ServiceServer.Update{{.GoTableName}}(req.Context(), reqb)
+	if err != nil {
+		h.OnError(w, req, http.StatusInternalServerError, err)
+		return
+	}
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		wr.JSONOk(resp)
+	default:
+		h.OnSuccess(w, req, "{{.GoTableName}} Updated")
+	}
+}
+
+// ─────────────────────────────────────────────
+// Delete
+// ─────────────────────────────────────────────
+
+func (h *{{.GoTableName}}Handler) Delete{{.GoTableName}}Handle(w http.ResponseWriter, req *http.Request) {
+	reqb := new(api.{{.GoTableName}}{{.PrimaryKey.GoColumnName}})
+	if err := app.GetRequestParams(reqb, req); err != nil {
+		h.OnError(w, req, http.StatusBadRequest, err)
+		return
+	}
+	_, err := h.{{.GoTableName}}ServiceServer.Delete{{.GoTableName}}(req.Context(), reqb)
+	if err != nil {
+		h.OnError(w, req, http.StatusInternalServerError, err)
+		return
+	}
+	switch app.ResponseConentType(req) {
+	case app.ResponseJSON:
+		app.NewWriter(w, req).JSONOk(map[string]string{"message": "{{.GoTableName}} Deleted"})
+	case app.ResponseHTMX:
+		// Empty response: HTMX replaces the row (<tr>) with nothing, removing it from the DOM.
+		w.WriteHeader(http.StatusOK)
+	default:
+		h.OnSuccess(w, req, "{{.GoTableName}} Deleted")
+	}
 }

@@ -22,6 +22,12 @@ var protoTmpl []byte
 //go:embed "internal/templates/service.tmpl"
 var serviceTmpl []byte
 
+//go:embed "internal/templates/http.tmpl"
+var httpTmpl []byte
+
+//go:embed "internal/templates/view.tmpl"
+var viewTmpl []byte
+
 //go:embed "internal/templates/client.tmpl"
 var clientGenericTmpl []byte
 
@@ -29,14 +35,14 @@ var clientGenericTmpl []byte
 var genericTmpl []byte
 
 var (
-	database string
-	path     string
-	service  bool
-	protopkg string
-	dialect  string
+	database    string
+	path        string
+	service     bool
+	httpHandler bool
+	protopkg    string
+	dialect     string
 )
 
-// var fields string
 const defaultDir = "crud"
 
 func init() {
@@ -46,7 +52,13 @@ func init() {
 		&service,
 		"service",
 		false,
-		"-service  generate GRPC proto message and service implementation",
+		"-service  generate gRPC proto, service implementation, HTTP handler, and templ views",
+	)
+	flag.BoolVar(
+		&httpHandler,
+		"http",
+		false,
+		"-http  generate HTTP handler (service/[name].http.go) and templ views (views/[name].templ)",
 	)
 	flag.StringVar(&protopkg, "protopkg", "", "-protopkg  proto package field value")
 	flag.StringVar(
@@ -60,17 +72,14 @@ func init() {
 func main() {
 	flag.Parse()
 
-	// subcommand
-	if len(os.Args) == 2 {
-		switch os.Args[1] {
-		case "init":
-			// create crud dir
-			if err := os.Mkdir(defaultDir, os.ModePerm); err != nil {
-				log.Fatal(err)
-			}
-			return
+	// positional subcommand: crud init
+	if len(os.Args) == 2 && os.Args[1] == "init" {
+		if err := os.Mkdir(defaultDir, os.ModePerm); err != nil {
+			log.Fatal(err)
 		}
+		return
 	}
+
 	if len(os.Args) == 1 {
 		info, err := os.Stat(defaultDir)
 		if err != nil {
@@ -151,12 +160,15 @@ var f = template.FuncMap{
 }
 
 func generateFiles(tableObj *model.Table) {
-	// 创建目录
 	dir := filepath.Join(defaultDir, tableObj.PackageName)
 	os.Mkdir(dir, os.ModePerm)
 	generateFile(filepath.Join(dir, tableObj.PackageName+".go"), string(genericTmpl), f, tableObj)
 	if service {
 		generateService(tableObj)
+	}
+	if httpHandler {
+		generateHTTP(tableObj)
+		generateView(tableObj)
 	}
 }
 
@@ -168,31 +180,47 @@ func generateService(tableObj *model.Table) {
 
 	generateFile(filepath.Join("proto", pkgName+".api.proto"), string(protoTmpl), f, tableObj)
 
-	// proto-go  grpc
-	var cmd *exec.Cmd
-	cmd = exec.Command(
+	// compile proto → Go + gRPC stubs
+	cmd := exec.Command(
 		"protoc",
 		"-I.",
 		"--go_out=.",
 		"--go-grpc_out=.",
 		filepath.Join("proto", pkgName+".api.proto"),
 	)
-
 	cmd.Dir = filepath.Join(model.GetCurrentPath())
 	log.Println(cmd.Dir, "exec:", cmd.String())
-	s, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Println(string(s), err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Println(string(out), err)
 	}
+
 	pbfile := filepath.Join("api", pkgName+".api.pb.go")
-	ara, err := tag.ParseFile(pbfile, nil, nil)
-	if err != nil {
+	if ara, err := tag.ParseFile(pbfile, nil, nil); err != nil {
 		log.Printf("err:%v", err)
 	} else {
 		tag.WriteFile(pbfile, ara, false)
 	}
 
 	generateFile(filepath.Join("service", pkgName+".service.go"), string(serviceTmpl), f, tableObj)
+	if httpHandler {
+		generateHTTP(tableObj)
+		generateView(tableObj)
+	}
+}
+
+// generateHTTP writes service/[name].http.go from http.tmpl.
+func generateHTTP(tableObj *model.Table) {
+	os.Mkdir(filepath.Join("service"), os.ModePerm)
+	pkgName := tableObj.PackageName
+	generateFile(filepath.Join("service", pkgName+".http.go"), string(httpTmpl), f, tableObj)
+}
+
+// generateView writes views/[name].templ from view.tmpl.
+// Run `templ generate` afterwards to produce the compiled *_templ.go file.
+func generateView(tableObj *model.Table) {
+	os.Mkdir(filepath.Join("views"), os.ModePerm)
+	pkgName := tableObj.PackageName
+	generateFile(filepath.Join("views", pkgName+".templ"), string(viewTmpl), f, tableObj)
 }
 
 func generateFile(filename, tmpl string, f template.FuncMap, data interface{}) {
@@ -201,15 +229,14 @@ func generateFile(filename, tmpl string, f template.FuncMap, data interface{}) {
 		log.Fatalln(err)
 	}
 	bs := bytes.NewBuffer(nil)
-	err = tpl.Execute(bs, data)
-	if err != nil {
+	if err = tpl.Execute(bs, data); err != nil {
 		log.Fatalln(err)
 	}
 
 	result := bs.Bytes()
+	// Only run go/format on .go files; .templ files have their own formatter.
 	if strings.HasSuffix(filename, ".go") {
-		result, err = format.Source(bs.Bytes())
-		if err != nil {
+		if result, err = format.Source(bs.Bytes()); err != nil {
 			log.Fatal(err)
 		}
 	}

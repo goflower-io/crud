@@ -1,187 +1,324 @@
-
 package views
 
 import "fmt"
-import 	"{{.RelativePath}}/api"
-import "github.com/goflower-io/golib/net/http/ui"
-import "github.com/goflower-io/golib/net/http"
 import "net/url"
+{{- if .ImportTime}}
+import "time"
+{{- end}}
+import "github.com/goflower-io/golib/net/app"
+import "{{.RelativePath}}/api"
 
-
-{{ $pkgName := .PackageName}}
 {{ $tableName := .GoTableName}}
-{{ $protopkg := .Protopkg}}
+{{ $pkgName := .PackageName}}
 
+// _{{.PackageName}}SvcPath is the HTTP route prefix for all {{.GoTableName}} handlers.
+// Change the value if your proto uses a package prefix, e.g. "/mypkg.{{.GoTableName}}Service".
+const _{{.PackageName}}SvcPath = "{{if .Protopkg}}/{{.Protopkg}}.{{.GoTableName}}Service{{else}}/{{.GoTableName}}Service{{end}}"
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
+
+// {{.GoTableName}}Shell is the page layout. Customise the <head> (title, CDN links)
+// and surrounding chrome (nav, footer) here.
+//
+// Recommended additions:
+//
+//	<script src="https://cdn.tailwindcss.com"></script>
+//	<script src="https://unpkg.com/htmx.org@2"></script>
 templ {{.GoTableName}}Shell() {
- @Index(){
-<div>
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{{.GoTableName}}</title>
+		</head>
+		<body>
 			{ children... }
-	</div>
- }
+		</body>
+	</html>
 }
 
-templ {{.GoTableName}}ListPage(resp *api.List{{.GoTableName}}sResp,path string, form url.Values) {
+// ─── List ─────────────────────────────────────────────────────────────────────
+
+// {{.GoTableName}}ListPage renders the full page (Shell + list view).
+templ {{.GoTableName}}ListPage(resp *api.List{{.GoTableName}}sResp, path string, form url.Values) {
 	@{{.GoTableName}}Shell() {
-		@{{.GoTableName}}ListView(resp,path,form)
+		@{{.GoTableName}}ListView(resp, path, form)
 	}
 }
 
-templ {{.GoTableName}}ListView(resp *api.List{{.GoTableName}}sResp,path string,form url.Values) {
-	@ui.PaginationView(
-		"{{.GoTableName}}", path, form, http.CaculatePaginator(resp.GetPage(), resp.GetPageSize(), resp.GetTotalCount())) {
-  <table>
-    <tr>
-  {{- range $index,$field := .Fields }}
-  <th>{{$field.GoColumnName}}</th>
-  {{- end}}
-    </tr>
-		for idx,a :=range resp.Get{{.GoTableName}}s() {
-			@{{.GoTableName}}ItemView(idx, a)
-		}
-  </table>
-  }
+// {{.GoTableName}}ListView is the HTMX-swappable list fragment.
+// HTMX target id: "{{.PackageName}}-list"
+templ {{.GoTableName}}ListView(resp *api.List{{.GoTableName}}sResp, path string, form url.Values) {
+	<div id="{{.PackageName}}-list">
+		<div>
+			<h2>{{.GoTableName}}</h2>
+			<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/Create{{.GoTableName}}") }>New</a>
+		</div>
+		<table>
+			<thead>
+				<tr>
+					{{- range .Fields}}
+					<th>{{.GoColumnName}}</th>
+					{{- end}}
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, a := range resp.Get{{.GoTableName}}s() {
+					@{{.GoTableName}}ItemView(a)
+				}
+			</tbody>
+		</table>
+		@{{.PackageName}}PaginationView(app.CaculatePaginator(resp.GetPage(), resp.GetPageSize(), resp.GetTotalCount()), path)
+	</div>
 }
 
-templ {{.GoTableName}}ItemView(idx int, a *api.{{.GoTableName}}) {
-	<tr id={ fmt.Sprintf("{{.GoTableName}}Item_%d", idx) }>
-		{{- range $index,$field := .Fields}}
-     <td>{fmt.Sprintf("%v",a.{{$field.GoColumnName}})}</td>
-    {{- end}}
+// {{.GoTableName}}ItemView renders a single table row with View / Edit / Delete actions.
+templ {{.GoTableName}}ItemView(a *api.{{.GoTableName}}) {
+	<tr>
+		{{- range .Fields}}
+		{{- if eq .GoColumnType "time.Time"}}
+		<td>{ a.Get{{.GoColumnName}}().AsTime().Format(time.DateTime) }</td>
+		{{- else}}
+		<td>{ fmt.Sprint(a.Get{{.GoColumnName}}()) }</td>
+		{{- end}}
+		{{- end}}
+		<td>
+			<a href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Get{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }>View</a>
+			<a href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }>Edit</a>
+			<button
+				hx-delete={ fmt.Sprintf(_{{.PackageName}}SvcPath+"/Delete{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}()) }
+				hx-confirm="Delete this {{.GoTableName}}?"
+				hx-target="closest tr"
+				hx-swap="outerHTML"
+			>Delete</button>
+		</td>
 	</tr>
 }
 
+// ─── ListMore (cursor-based infinite scroll) ──────────────────────────────────
+
+// {{.GoTableName}}ListMorePage renders the full infinite-scroll page (Shell + initial batch).
+templ {{.GoTableName}}ListMorePage(resp *api.List{{.GoTableName}}sMoreResp, path string, pageSize int32) {
+	@{{.GoTableName}}Shell() {
+		<table>
+			<thead>
+				<tr>
+					{{- range .Fields}}
+					<th>{{.GoColumnName}}</th>
+					{{- end}}
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody id="{{.PackageName}}-more-list">
+				@{{.GoTableName}}ListMoreView(resp, path, pageSize)
+			</tbody>
+		</table>
+	}
+}
+
+// {{.GoTableName}}ListMoreView renders a batch of rows plus the sentinel row for the next load.
+// HTMX swaps this fragment into "#{{.PackageName}}-more-list" (outerHTML of the sentinel).
+templ {{.GoTableName}}ListMoreView(resp *api.List{{.GoTableName}}sMoreResp, path string, pageSize int32) {
+	for _, a := range resp.Get{{.GoTableName}}s() {
+		@{{.GoTableName}}ItemView(a)
+	}
+	@{{.PackageName}}LoadMoreSentinel(resp.GetNextPageToken(), resp.GetHasMore(), path, pageSize)
+}
+
+// {{.PackageName}}LoadMoreSentinel is the invisible trigger row appended after each batch.
+// When it enters the viewport, HTMX fetches the next page and replaces this row
+// with the new rows + a fresh sentinel. Renders nothing when has_more is false.
+templ {{.PackageName}}LoadMoreSentinel(nextPageToken string, hasMore bool, path string, pageSize int32) {
+	if hasMore {
+		<tr
+			hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}sMore?page_token=%s&page_size=%d", path, nextPageToken, pageSize) }
+			hx-trigger="intersect once"
+			hx-target="this"
+			hx-swap="outerHTML"
+		></tr>
+	}
+}
+
+// ─── Detail ───────────────────────────────────────────────────────────────────
+
+// {{.GoTableName}}DetailPage renders the full detail page.
 templ {{.GoTableName}}DetailPage(a *api.{{.GoTableName}}) {
 	@{{.GoTableName}}Shell() {
 		@{{.GoTableName}}DetailView(a)
 	}
 }
 
+// {{.GoTableName}}DetailView renders a definition list of all fields.
 templ {{.GoTableName}}DetailView(a *api.{{.GoTableName}}) {
-	
-  {{- range $index,$field := .Fields }}
-  <div>
-  <lable for="{{$field.GoColumnName}}">{{$field.GoColumnName}}:</lable>
-  <div>{fmt.Sprintf("%v", a.{{$field.GoColumnName}}) }</div>
-  </div>
-  {{- end}}
+	<div>
+		<dl>
+			{{- range .Fields}}
+			<div>
+				<dt>{{.GoColumnName}}</dt>
+				{{- if eq .GoColumnType "time.Time"}}
+				<dd>{ a.Get{{.GoColumnName}}().AsTime().Format(time.DateTime) }</dd>
+				{{- else}}
+				<dd>{ fmt.Sprint(a.Get{{.GoColumnName}}()) }</dd>
+				{{- end}}
+			</div>
+			{{- end}}
+		</dl>
+		<div>
+			<a href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }>Edit</a>
+			<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") }>Back</a>
+		</div>
+	</div>
 }
 
+// ─── Create ───────────────────────────────────────────────────────────────────
+
+// {{.GoTableName}}CreatePage renders the full create page.
 templ {{.GoTableName}}CreatePage() {
 	@{{.GoTableName}}Shell() {
 		@{{.GoTableName}}CreateView()
 	}
 }
 
+// {{.GoTableName}}CreateView renders the create form (HTMX-swappable fragment).
+// On success the server returns a new fragment replacing this form.
 templ {{.GoTableName}}CreateView() {
 	<form
-		hx-boost="true"
-    {{- if eq $protopkg ""}}
-		hx-put="/{{.GoTableName}}Service/Create{{.GoTableName}}"
-		{{- else}}
-
-		hx-put="/{{$protopkg}}.{{.GoTableName}}Service/Create{{.GoTableName}}"
-{{- end}}
-    hx-target="this"
+		hx-put={ _{{.PackageName}}SvcPath + "/Create{{.GoTableName}}" }
+		hx-target="this"
 		hx-swap="outerHTML"
 	>
-  <div>
-  <lable for="{{.PrimaryKey.GoColumnName}}">{{.PrimaryKey.GoColumnName}}</lable>
-		<input type="{{.PrimaryKey.HTMLInputType}}" id="{{.PrimaryKey.GoColumnName}}" name="{{.PrimaryKey.GoColumnName}}" disabled/>
-</div>
-	 {{- range $index,$field := .Fields }}
-   {{- if eq $field.IsPrimaryKey false}} 
-    <div>
-			<lable for="{{$field.GoColumnName}}">{{$field.GoColumnName}}:</lable>
-			{{- if eq $field.HTMLInputType "select"}}
-      <select 	
-        id="{{$field.GoColumnName}}"
-				name="{{$field.GoColumnName}}"
-      >
-         {{- range $key,$val := $field.EnumValues}}
-            <option value="{{$key}}">{{$val}}</option>
-         {{- end}}
-      </select>
-
-      {{- else}}
-      <input
-				type="{{$field.HTMLInputType}}"
-				id="{{$field.GoColumnName}}"
-				name="{{$field.GoColumnName}}"
-			/>
-      {{- end}}
+		{{- range .Fields}}
+		{{- if eq .IsPrimaryKey false}}
+		<div>
+			<label for="{{.GoColumnName}}">{{.GoColumnName}}</label>
+			{{- if eq .HTMLInputType "select"}}
+			<select id="{{.GoColumnName}}" name="{{.GoColumnName}}">
+				{{- range $val, $label := .EnumValues}}
+				<option value="{{$val}}">{{$label}}</option>
+				{{- end}}
+			</select>
+			{{- else if eq .GoColumnType "time.Time"}}
+			<input type="datetime-local" id="{{.GoColumnName}}" name="{{.GoColumnName}}"/>
+			{{- else}}
+			<input type="{{.HTMLInputType}}" id="{{.GoColumnName}}" name="{{.GoColumnName}}"/>
+			{{- end}}
 		</div>
-    {{- end}}
-    {{- end}}
-		<input type="submit" value="submit"/>
+		{{- end}}
+		{{- end}}
+		<button type="submit">Create</button>
 	</form>
 }
 
+// ─── Update ───────────────────────────────────────────────────────────────────
+
+// {{.GoTableName}}UpdatePage renders the full update page.
 templ {{.GoTableName}}UpdatePage(a *api.{{.GoTableName}}) {
 	@{{.GoTableName}}Shell() {
 		@{{.GoTableName}}UpdateView(a)
 	}
 }
 
+// {{.GoTableName}}UpdateView renders the update form (HTMX-swappable fragment).
+//
+// Changed fields are tracked via hidden Masks checkboxes that mirror the
+// proto {{.GoTableName}}Field enum values. Each input's hx-on:change handler
+// automatically checks the corresponding mask before form submission,
+// so only modified fields are sent to the server.
 templ {{.GoTableName}}UpdateView(a *api.{{.GoTableName}}) {
 	<form
-		hx-boost="true"
-    {{- if eq $protopkg ""}}
-		hx-post={ "/{{.GoTableName}}Service/Update{{.GoTableName}}?{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}=" + fmt.Sprintf("%d",a.{{.PrimaryKey.GoColumnName}}) }
-		{{- else}}
-    hx-post={ "/{{$protopkg}}.{{.GoTableName}}Service/Update{{.GoTableName}}?{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}=" + fmt.Sprintf("%d",a.{{.PrimaryKey.GoColumnName}}) }
-
-    {{- end}}
-    hx-target="this"
+		hx-post={ fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}()) }
+		hx-target="this"
 		hx-swap="outerHTML"
 	>
+		{{- range $index, $field := .Fields}}
+		{{- if eq $field.IsPrimaryKey true}}
 		<div>
-			<lable for="{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}">{{.PrimaryKey.GoColumnName}}:</lable>
+			<label for="{{$field.GoColumnName}}">{{$field.GoColumnName}}</label>
 			<input
-				disabled
-				type="{{.PrimaryKey.HTMLInputType}}"
-				id="{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}"
-				name="{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}"
-				value={ fmt.Sprintf("%d",a.{{.PrimaryKey.GoColumnName}}) }
-			/>
-		</div>  
-	 {{- range $index,$field := .Fields }}
-   {{- if eq $field.IsPrimaryKey false}} 
-    <div>
-			<lable for="{{$tableName}}.{{$field.GoColumnName}}">{{$field.GoColumnName}}:</lable>
-			{{- if eq $field.HTMLInputType "select"}}
-      <select 	
-        id="{{$tableName}}.{{$field.GoColumnName}}"
-				name="{{$tableName}}.{{$field.GoColumnName}}"
-				value={ fmt.Sprintf("%v",a.{{$field.GoColumnName}}) }
-				hx-on:change="document.getElementById('{{$tableName}}.{{$field.GoColumnName}}.Mask').checked = true;"
-      >
-         {{- range $key,$val := $field.EnumValues}}
-         if a.{{$field.GoColumnName}} == {{$key}}{
-            <option value="{{$key}}" selected>{{$val}}</option>
-         }else{
-            <option value="{{$key}}">{{$val}}</option>
-         }
-         {{- end}}
-      </select>
-
-      {{- else}}
-      <input
 				type="{{$field.HTMLInputType}}"
-				id="{{$tableName}}.{{$field.GoColumnName}}"
-				name="{{$tableName}}.{{$field.GoColumnName}}"
-				value={ fmt.Sprintf("%v",a.{{$field.GoColumnName}}) }
-				hx-on:change="document.getElementById('{{$tableName}}.{{$field.GoColumnName}}.Mask').checked = true;"
+				id="{{$field.GoColumnName}}"
+				name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				value={ fmt.Sprint(a.Get{{$field.GoColumnName}}()) }
+				disabled
 			/>
-      {{- end}}
 		</div>
-	{{- end }}
-  {{- end}}
-		<input type="submit" value="submit"/>
-
-	{{- range $index,$field := .Fields }}
-  {{- if eq $field.IsPrimaryKey false}} 
-		<input type="checkbox" value="{{Incr $index}}" hidden id="{{$tableName}}.{{$field.GoColumnName}}.Mask" name="Masks"/>
-	{{- end}}
-  {{- end}}
+		{{- else}}
+		<div>
+			<label for="{{$.GoTableName}}.{{$field.GoColumnName}}">{{$field.GoColumnName}}</label>
+			{{- if eq $field.HTMLInputType "select"}}
+			<select
+				id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+			>
+				{{- range $val, $label := $field.EnumValues}}
+				if a.Get{{$field.GoColumnName}}() == {{$val}} {
+					<option value="{{$val}}" selected>{{$label}}</option>
+				} else {
+					<option value="{{$val}}">{{$label}}</option>
+				}
+				{{- end}}
+			</select>
+			{{- else if eq $field.GoColumnType "time.Time"}}
+			<input
+				type="datetime-local"
+				id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				value={ a.Get{{$field.GoColumnName}}().AsTime().Format("2006-01-02T15:04") }
+				hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+			/>
+			{{- else}}
+			<input
+				type="{{$field.HTMLInputType}}"
+				id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+				value={ fmt.Sprint(a.Get{{$field.GoColumnName}}()) }
+				hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+			/>
+			{{- end}}
+			<input type="checkbox" id="mask_{{Incr $index}}" name="Masks" value="{{Incr $index}}" hidden/>
+		</div>
+		{{- end}}
+		{{- end}}
+		<button type="submit">Update</button>
 	</form>
+}
+
+// ─── Pagination (package-private) ────────────────────────────────────────────
+
+// {{.PackageName}}PaginationView renders prev / page-numbers / next navigation.
+// HTMX requests replace the "#{{.PackageName}}-list" target and update the browser URL.
+templ {{.PackageName}}PaginationView(p *app.Paginator, path string) {
+	<nav>
+		if p.Pre > 0 {
+			<a
+				hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?page=%d&page_size=%d", path, p.Pre, p.PageSize) }
+				hx-target="#{{.PackageName}}-list"
+				hx-swap="outerHTML"
+				hx-push-url="true"
+			>Prev</a>
+		}
+		for _, pg := range p.Pages {
+			if pg == p.CurrentPage {
+				<span>{ fmt.Sprint(pg) }</span>
+			} else {
+				<a
+					hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?page=%d&page_size=%d", path, pg, p.PageSize) }
+					hx-target="#{{.PackageName}}-list"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+				>{ fmt.Sprint(pg) }</a>
+			}
+		}
+		if p.Next <= p.TotalPage {
+			<a
+				hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?page=%d&page_size=%d", path, p.Next, p.PageSize) }
+				hx-target="#{{.PackageName}}-list"
+				hx-swap="outerHTML"
+				hx-push-url="true"
+			>Next</a>
+		}
+	</nav>
 }
