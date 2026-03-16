@@ -1,0 +1,581 @@
+package views
+
+import "fmt"
+import "net/url"
+{{- if .ImportTime}}
+import "time"
+{{- end}}
+import "github.com/goflower-io/golib/net/app"
+import "{{.RelativePath}}/api"
+
+{{ $tableName := .GoTableName}}
+{{ $pkgName := .PackageName}}
+
+// _{{.PackageName}}SvcPath is the HTTP route prefix for all {{.GoTableName}} handlers.
+const _{{.PackageName}}SvcPath = "{{if .Protopkg}}/{{.Protopkg}}.{{.GoTableName}}Service{{else}}/{{.GoTableName}}Service{{end}}"
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
+
+templ {{.GoTableName}}Shell() {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="light">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>{{.GoTableName}} Admin</title>
+			<link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+			<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+			<link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
+		</head>
+		<body class="bg-base-200 min-h-screen">
+			<!-- Navbar -->
+			<div class="navbar bg-base-100 shadow-sm sticky top-0 z-50 border-b border-base-200">
+				<div class="container mx-auto max-w-7xl px-4">
+					<div class="flex-1 gap-2">
+						<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="btn btn-ghost font-bold text-lg tracking-tight">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+							</svg>
+							{{.GoTableName}}
+						</a>
+					</div>
+					<div class="flex-none items-center gap-3">
+						<span id="_spinner" class="hidden">
+							<span class="loading loading-spinner loading-sm text-primary"></span>
+						</span>
+						<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/Create{{.GoTableName}}") } class="btn btn-primary btn-sm gap-1">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+							</svg>
+							New
+						</a>
+					</div>
+				</div>
+			</div>
+			<!-- Page content -->
+			<main class="container mx-auto max-w-7xl px-4 py-8">
+				{ children... }
+			</main>
+			<!-- Delete confirm modal -->
+			<dialog id="_confirmModal" class="modal modal-bottom sm:modal-middle">
+				<div class="modal-box">
+					<h3 class="font-bold text-lg">Confirm Delete</h3>
+					<p class="py-4 text-base-content/60 text-sm">
+						This action cannot be undone. The record will be permanently deleted.
+					</p>
+					<div class="modal-action">
+						<form method="dialog">
+							<button class="btn btn-ghost">Cancel</button>
+						</form>
+						<button id="_confirmOk" class="btn btn-error gap-2">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+							</svg>
+							Delete
+						</button>
+					</div>
+				</div>
+				<form method="dialog" class="modal-backdrop">
+					<button>close</button>
+				</form>
+			</dialog>
+			<!-- Toast container -->
+			<div id="_toast" class="toast toast-end toast-bottom z-50 pointer-events-none"></div>
+			<script>
+				// Intercept hx-confirm → DaisyUI modal
+				// htmx v2 fires htmx:confirm for ALL requests; guard with e.detail.question
+				document.addEventListener('htmx:confirm', function(e) {
+					if (!e.detail.question) return;
+					e.preventDefault();
+					window._pendingHtmxReq = e.detail.issueRequest;
+					document.getElementById('_confirmModal').showModal();
+				});
+				document.getElementById('_confirmOk').addEventListener('click', function() {
+					document.getElementById('_confirmModal').close();
+					if (window._pendingHtmxReq) {
+						window._pendingHtmxReq(true);
+						window._pendingHtmxReq = null;
+					}
+				});
+				// Global spinner
+				document.addEventListener('htmx:beforeRequest', function() {
+					document.getElementById('_spinner').classList.remove('hidden');
+				});
+				document.addEventListener('htmx:afterRequest', function(e) {
+					document.getElementById('_spinner').classList.add('hidden');
+					if (!e.detail.successful) {
+						_showToast('alert-error', 'Request failed: ' + (e.detail.xhr.statusText || 'Unknown error'));
+					}
+				});
+				// Toast helper
+				function _showToast(cls, msg) {
+					var el = document.createElement('div');
+					el.className = 'alert ' + cls + ' shadow-lg pointer-events-auto text-sm';
+					el.innerHTML = '<span>' + msg + '</span>';
+					var container = document.getElementById('_toast');
+					container.appendChild(el);
+					setTimeout(function() { el.remove(); }, 3500);
+				}
+			</script>
+			<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"></script>
+		</body>
+	</html>
+}
+
+// ─── List ─────────────────────────────────────────────────────────────────────
+
+templ {{.GoTableName}}ListPage(resp *api.List{{.GoTableName}}sResp, path string, form url.Values) {
+	@{{.GoTableName}}Shell() {
+		@{{.GoTableName}}ListView(resp, path, form)
+	}
+}
+
+templ {{.GoTableName}}ListView(resp *api.List{{.GoTableName}}sResp, path string, form url.Values) {
+	<div id="{{.PackageName}}-list">
+		<!-- Page header -->
+		<div class="flex items-center justify-between mb-6">
+			<div>
+				<h1 class="text-2xl font-bold text-base-content">{{.GoTableName}} List</h1>
+				<p class="text-base-content/50 text-sm mt-0.5">
+					{ fmt.Sprint(resp.GetTotalCount()) } records total
+				</p>
+			</div>
+			<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/Create{{.GoTableName}}") } class="btn btn-primary gap-2">
+				<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+				</svg>
+				New {{.GoTableName}}
+			</a>
+		</div>
+		<!-- Table card -->
+		<div class="card bg-base-100 shadow-sm border border-base-200">
+			<div class="overflow-x-auto">
+				<table class="table table-zebra">
+					<thead>
+						<tr>
+							{{- range .Fields}}
+							<th class="text-base-content/60 font-semibold text-xs uppercase tracking-wider">{{.GoColumnName}}</th>
+							{{- end}}
+							<th class="text-base-content/60 font-semibold text-xs uppercase tracking-wider text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, a := range resp.Get{{.GoTableName}}s() {
+							@{{.GoTableName}}ItemView(a)
+						}
+					</tbody>
+				</table>
+			</div>
+			<!-- Pagination footer -->
+			<div class="px-4 py-3 border-t border-base-200 flex items-center justify-between">
+				<span class="text-sm text-base-content/50">
+					Page { fmt.Sprint(resp.GetPage()) } of { fmt.Sprint(resp.GetPageCount()) }
+				</span>
+				@{{.PackageName}}PaginationView(app.CaculatePaginator(resp.GetPage(), resp.GetPageSize(), resp.GetTotalCount()), path)
+			</div>
+		</div>
+	</div>
+}
+
+// {{.GoTableName}}ItemView renders a single table row.
+templ {{.GoTableName}}ItemView(a *api.{{.GoTableName}}) {
+	<tr class="hover">
+		{{- range .Fields}}
+		{{- if eq .GoColumnType "time.Time"}}
+		<td>
+			<span class="badge badge-ghost badge-sm font-mono">
+				{ a.Get{{.GoColumnName}}().AsTime().Format(time.DateTime) }
+			</span>
+		</td>
+		{{- else}}
+		<td class="max-w-xs">
+			<span class="truncate block text-sm">{ fmt.Sprint(a.Get{{.GoColumnName}}()) }</span>
+		</td>
+		{{- end}}
+		{{- end}}
+		<td>
+			<div class="flex items-center justify-end gap-1">
+				<a
+					href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Get{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }
+					class="btn btn-ghost btn-xs gap-1"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+						<path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+					</svg>
+					View
+				</a>
+				<a
+					href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }
+					class="btn btn-ghost btn-xs text-info gap-1"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+					</svg>
+					Edit
+				</a>
+				<button
+					hx-delete={ fmt.Sprintf(_{{.PackageName}}SvcPath+"/Delete{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}()) }
+					hx-confirm="Delete this record?"
+					hx-target="closest tr"
+					hx-swap="outerHTML swap:300ms"
+					class="btn btn-ghost btn-xs text-error gap-1"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+					</svg>
+					Delete
+				</button>
+			</div>
+		</td>
+	</tr>
+}
+
+// ─── ListMore (cursor-based infinite scroll) ──────────────────────────────────
+
+templ {{.GoTableName}}ListMorePage(resp *api.List{{.GoTableName}}sMoreResp, path string, pageSize int32) {
+	@{{.GoTableName}}Shell() {
+		<div class="flex items-center justify-between mb-6">
+			<h1 class="text-2xl font-bold text-base-content">{{.GoTableName}} List</h1>
+			<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/Create{{.GoTableName}}") } class="btn btn-primary gap-2">
+				<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+				</svg>
+				New {{.GoTableName}}
+			</a>
+		</div>
+		<div class="card bg-base-100 shadow-sm border border-base-200">
+			<div class="overflow-x-auto">
+				<table class="table table-zebra">
+					<thead>
+						<tr>
+							{{- range .Fields}}
+							<th class="text-base-content/60 font-semibold text-xs uppercase tracking-wider">{{.GoColumnName}}</th>
+							{{- end}}
+							<th class="text-base-content/60 font-semibold text-xs uppercase tracking-wider text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody id="{{.PackageName}}-more-list">
+						@{{.GoTableName}}ListMoreView(resp, path, pageSize)
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}
+
+templ {{.GoTableName}}ListMoreView(resp *api.List{{.GoTableName}}sMoreResp, path string, pageSize int32) {
+	for _, a := range resp.Get{{.GoTableName}}s() {
+		@{{.GoTableName}}ItemView(a)
+	}
+	@{{.PackageName}}LoadMoreSentinel(resp.GetNextPageToken(), resp.GetHasMore(), path, pageSize)
+}
+
+templ {{.PackageName}}LoadMoreSentinel(nextPageToken string, hasMore bool, path string, pageSize int32) {
+	if hasMore {
+		<tr
+			hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}sMore?PageToken=%s&PageSize=%d", _{{.PackageName}}SvcPath, nextPageToken, pageSize) }
+			hx-trigger="intersect once"
+			hx-target="this"
+			hx-swap="outerHTML"
+		>
+			<td colspan="999" class="text-center py-4">
+				<span class="loading loading-dots loading-sm text-primary"></span>
+			</td>
+		</tr>
+	}
+}
+
+// ─── Detail ───────────────────────────────────────────────────────────────────
+
+templ {{.GoTableName}}DetailPage(a *api.{{.GoTableName}}) {
+	@{{.GoTableName}}Shell() {
+		@{{.GoTableName}}DetailView(a)
+	}
+}
+
+templ {{.GoTableName}}DetailView(a *api.{{.GoTableName}}) {
+	<div class="max-w-2xl mx-auto">
+		<!-- Breadcrumb -->
+		<div class="text-sm breadcrumbs mb-6">
+			<ul>
+				<li>
+					<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="text-base-content/50 hover:text-primary">
+						{{.GoTableName}}
+					</a>
+				</li>
+				<li class="text-base-content font-medium">Detail</li>
+			</ul>
+		</div>
+		<div class="card bg-base-100 shadow-sm border border-base-200">
+			<div class="card-body">
+				<div class="flex items-center justify-between mb-4">
+					<h2 class="card-title text-xl">{{.GoTableName}} Detail</h2>
+					<a
+						href={ templ.SafeURL(fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}())) }
+						class="btn btn-primary btn-sm gap-2"
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+						</svg>
+						Edit
+					</a>
+				</div>
+				<div class="divider my-0"></div>
+				<dl class="divide-y divide-base-200">
+					{{- range .Fields}}
+					<div class="py-4 grid grid-cols-3 gap-4 items-start">
+						<dt class="text-sm font-medium text-base-content/50">{{.GoColumnName}}</dt>
+						{{- if eq .GoColumnType "time.Time"}}
+						<dd class="text-sm text-base-content col-span-2 font-mono">
+							{ a.Get{{.GoColumnName}}().AsTime().Format(time.DateTime) }
+						</dd>
+						{{- else}}
+						<dd class="text-sm text-base-content col-span-2 break-words">
+							{ fmt.Sprint(a.Get{{.GoColumnName}}()) }
+						</dd>
+						{{- end}}
+					</div>
+					{{- end}}
+				</dl>
+				<div class="card-actions justify-start mt-4 pt-4 border-t border-base-200">
+					<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="btn btn-ghost btn-sm gap-1">
+						<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+						</svg>
+						Back to List
+					</a>
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+// ─── Create ───────────────────────────────────────────────────────────────────
+
+templ {{.GoTableName}}CreatePage() {
+	@{{.GoTableName}}Shell() {
+		@{{.GoTableName}}CreateView()
+	}
+}
+
+templ {{.GoTableName}}CreateView() {
+	<div class="max-w-2xl mx-auto">
+		<!-- Breadcrumb -->
+		<div class="text-sm breadcrumbs mb-6">
+			<ul>
+				<li>
+					<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="text-base-content/50 hover:text-primary">
+						{{.GoTableName}}
+					</a>
+				</li>
+				<li class="text-base-content font-medium">New</li>
+			</ul>
+		</div>
+		<div class="card bg-base-100 shadow-sm border border-base-200">
+			<div class="card-body">
+				<h2 class="card-title text-xl mb-2">Create {{.GoTableName}}</h2>
+				<div class="divider my-0 mb-4"></div>
+				<form
+					hx-put={ _{{.PackageName}}SvcPath + "/Create{{.GoTableName}}" }
+					hx-target="this"
+					hx-swap="outerHTML"
+				>
+					<div class="grid grid-cols-1 gap-5">
+						{{- range .Fields}}
+						{{- if eq .IsPrimaryKey false}}
+						<div class="form-control w-full">
+							<label class="label pb-1" for="{{.GoColumnName}}">
+								<span class="label-text font-medium">{{.GoColumnName}}</span>
+							</label>
+							{{- if eq .HTMLInputType "select"}}
+							<select class="select select-bordered w-full" id="{{.GoColumnName}}" name="{{.GoColumnName}}">
+								<option disabled selected value="">— Select —</option>
+								{{- range $val, $label := .EnumValues}}
+								<option value="{{$val}}">{{$label}}</option>
+								{{- end}}
+							</select>
+							{{- else if eq .GoColumnType "time.Time"}}
+							<input
+								class="input input-bordered w-full"
+								type="datetime-local"
+								id="{{.GoColumnName}}"
+								name="{{.GoColumnName}}"
+							/>
+							{{- else}}
+							<input
+								class="input input-bordered w-full"
+								type="{{.HTMLInputType}}"
+								id="{{.GoColumnName}}"
+								name="{{.GoColumnName}}"
+								placeholder="{{.GoColumnName}}"
+							/>
+							{{- end}}
+						</div>
+						{{- end}}
+						{{- end}}
+					</div>
+					<div class="flex items-center justify-end gap-3 mt-8 pt-6 border-t border-base-200">
+						<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="btn btn-ghost">
+							Cancel
+						</a>
+						<button type="submit" class="btn btn-primary gap-2">
+							<span class="htmx-indicator loading loading-spinner loading-xs"></span>
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+							</svg>
+							Create
+						</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+
+templ {{.GoTableName}}UpdatePage(a *api.{{.GoTableName}}) {
+	@{{.GoTableName}}Shell() {
+		@{{.GoTableName}}UpdateView(a)
+	}
+}
+
+templ {{.GoTableName}}UpdateView(a *api.{{.GoTableName}}) {
+	<div class="max-w-2xl mx-auto">
+		<!-- Breadcrumb -->
+		<div class="text-sm breadcrumbs mb-6">
+			<ul>
+				<li>
+					<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="text-base-content/50 hover:text-primary">
+						{{.GoTableName}}
+					</a>
+				</li>
+				<li class="text-base-content font-medium">Edit</li>
+			</ul>
+		</div>
+		<div class="card bg-base-100 shadow-sm border border-base-200">
+			<div class="card-body">
+				<h2 class="card-title text-xl mb-2">Edit {{.GoTableName}}</h2>
+				<div class="divider my-0 mb-4"></div>
+				<form
+					hx-post={ fmt.Sprintf(_{{.PackageName}}SvcPath+"/Update{{.GoTableName}}?{{.GoTableName}}.{{.PrimaryKey.GoColumnName}}=%v", a.Get{{.PrimaryKey.GoColumnName}}()) }
+					hx-target="this"
+					hx-swap="outerHTML"
+				>
+					<div class="grid grid-cols-1 gap-5">
+						{{- range $index, $field := .Fields}}
+						{{- if eq $field.IsPrimaryKey true}}
+						<div class="form-control w-full">
+							<label class="label pb-1" for="{{$field.GoColumnName}}">
+								<span class="label-text font-medium">{{$field.GoColumnName}}</span>
+								<span class="label-text-alt badge badge-ghost badge-sm">Primary Key</span>
+							</label>
+							<input
+								class="input input-bordered w-full input-disabled bg-base-200 cursor-not-allowed"
+								type="{{$field.HTMLInputType}}"
+								id="{{$field.GoColumnName}}"
+								name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								value={ fmt.Sprint(a.Get{{$field.GoColumnName}}()) }
+								disabled
+							/>
+						</div>
+						{{- else}}
+						<div class="form-control w-full">
+							<label class="label pb-1" for="{{$.GoTableName}}.{{$field.GoColumnName}}">
+								<span class="label-text font-medium">{{$field.GoColumnName}}</span>
+							</label>
+							{{- if eq $field.HTMLInputType "select"}}
+							<select
+								class="select select-bordered w-full"
+								id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+							>
+								{{- range $val, $label := $field.EnumValues}}
+								if a.Get{{$field.GoColumnName}}() == {{$val}} {
+									<option value="{{$val}}" selected>{{$label}}</option>
+								} else {
+									<option value="{{$val}}">{{$label}}</option>
+								}
+								{{- end}}
+							</select>
+							{{- else if eq $field.GoColumnType "time.Time"}}
+							<input
+								class="input input-bordered w-full"
+								type="datetime-local"
+								id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								value={ a.Get{{$field.GoColumnName}}().AsTime().Format("2006-01-02T15:04") }
+								hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+							/>
+							{{- else}}
+							<input
+								class="input input-bordered w-full"
+								type="{{$field.HTMLInputType}}"
+								id="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								name="{{$.GoTableName}}.{{$field.GoColumnName}}"
+								value={ fmt.Sprint(a.Get{{$field.GoColumnName}}()) }
+								hx-on:change="document.getElementById('mask_{{Incr $index}}').checked=true"
+							/>
+							{{- end}}
+							<input type="checkbox" id="mask_{{Incr $index}}" name="Masks" value="{{Incr $index}}" hidden/>
+						</div>
+						{{- end}}
+						{{- end}}
+					</div>
+					<div class="flex items-center justify-end gap-3 mt-8 pt-6 border-t border-base-200">
+						<a href={ templ.SafeURL(_{{.PackageName}}SvcPath + "/List{{.GoTableName}}s") } class="btn btn-ghost">
+							Cancel
+						</a>
+						<button type="submit" class="btn btn-primary gap-2">
+							<span class="htmx-indicator loading loading-spinner loading-xs"></span>
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+							</svg>
+							Save Changes
+						</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+templ {{.PackageName}}PaginationView(p *app.Paginator, path string) {
+	<div class="join">
+		if p.Pre > 0 {
+			<a
+				hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?Page=%d&PageSize=%d", _{{.PackageName}}SvcPath, p.Pre, p.PageSize) }
+				hx-target="#{{.PackageName}}-list"
+				hx-swap="outerHTML"
+				hx-push-url="true"
+				class="join-item btn btn-sm"
+			>«</a>
+		}
+		for _, pg := range p.Pages {
+			if pg == p.CurrentPage {
+				<button class="join-item btn btn-sm btn-primary">{ fmt.Sprint(pg) }</button>
+			} else {
+				<a
+					hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?Page=%d&PageSize=%d", _{{.PackageName}}SvcPath, pg, p.PageSize) }
+					hx-target="#{{.PackageName}}-list"
+					hx-swap="outerHTML"
+					hx-push-url="true"
+					class="join-item btn btn-sm btn-ghost"
+				>{ fmt.Sprint(pg) }</a>
+			}
+		}
+		if p.Next <= p.TotalPage {
+			<a
+				hx-get={ fmt.Sprintf("%s/List{{.GoTableName}}s?Page=%d&PageSize=%d", _{{.PackageName}}SvcPath, p.Next, p.PageSize) }
+				hx-target="#{{.PackageName}}-list"
+				hx-swap="outerHTML"
+				hx-push-url="true"
+				class="join-item btn btn-sm"
+			>»</a>
+		}
+	</div>
+}

@@ -28,6 +28,9 @@ var httpTmpl []byte
 //go:embed "internal/templates/view.tmpl"
 var viewTmpl []byte
 
+//go:embed "internal/templates/view_daisy.tmpl"
+var viewDaisyTmpl []byte
+
 //go:embed "internal/templates/client.tmpl"
 var clientGenericTmpl []byte
 
@@ -41,6 +44,7 @@ var (
 	httpHandler bool
 	protopkg    string
 	dialect     string
+	ui          string
 )
 
 const defaultDir = "crud"
@@ -67,6 +71,7 @@ func init() {
 		"mysql",
 		"-dialect only support mysql postgres sqlite3, default mysql ",
 	)
+	flag.StringVar(&ui, "ui", "", "-ui daisy  use DaisyUI + TailwindCSS view template")
 }
 
 func main() {
@@ -215,12 +220,16 @@ func generateHTTP(tableObj *model.Table) {
 	generateFile(filepath.Join("service", pkgName+".http.go"), string(httpTmpl), f, tableObj)
 }
 
-// generateView writes views/[name].templ from view.tmpl.
+// generateView writes views/[name].templ from view.tmpl (or view_daisy.tmpl with -ui daisy).
 // Run `templ generate` afterwards to produce the compiled *_templ.go file.
 func generateView(tableObj *model.Table) {
 	os.Mkdir(filepath.Join("views"), os.ModePerm)
 	pkgName := tableObj.PackageName
-	generateFile(filepath.Join("views", pkgName+".templ"), string(viewTmpl), f, tableObj)
+	tmpl := viewTmpl
+	if ui == "daisy" {
+		tmpl = viewDaisyTmpl
+	}
+	generateFile(filepath.Join("views", pkgName+".templ"), string(tmpl), f, tableObj)
 }
 
 func generateFile(filename, tmpl string, f template.FuncMap, data interface{}) {
