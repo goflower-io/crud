@@ -330,7 +330,7 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}sMore(ctx context.Cont
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if len(list) <= int(size) {
-		return &api.List{{.GoTableName}}sMoreResp{Users: convert{{.GoTableName}}List(list), NextPageToken: ""}, nil
+		return &api.List{{.GoTableName}}sMoreResp{ {{.GoTableName}}s: convert{{.GoTableName}}List(list), NextPageToken: ""}, nil
 	}
 
 	last := list[len(list)-1]
@@ -362,7 +362,7 @@ func (s *{{.GoTableName}}ServiceImpl) List{{.GoTableName}}sMore(ctx context.Cont
 	cursorData, _ := proto.Marshal(nextcursor)
 	token := base64.URLEncoding.EncodeToString(cursorData)
 	list2 := list[:len(list)-1]
-	return &api.List{{.GoTableName}}sMoreResp{Users: convert{{.GoTableName}}List(list2), NextPageToken: token, HasMore: true}, nil
+	return &api.List{{.GoTableName}}sMoreResp{ {{.GoTableName}}s: convert{{.GoTableName}}List(list2), NextPageToken: token, HasMore: true}, nil
 }
 func convert{{.GoTableName}}(a *{{.PackageName}}.{{.GoTableName}}) *api.{{.GoTableName}} {
 	return &api.{{.GoTableName}}{
