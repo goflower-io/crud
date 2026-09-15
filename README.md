@@ -305,6 +305,17 @@ if err != nil {
 return tx.Commit()
 ```
 
+### Access the underlying DB
+
+`Client.DB()` exposes the internal `*xsql.DB` for custom SQL, read-write
+routing, or pool tuning:
+
+```go
+db := client.DB()
+db.SetLogger(xsql.SlogLogger(slog.Default())) // optional SQL logging
+row := db.Master().QueryRowContext(ctx, "SELECT ...")
+```
+
 ### Debug logging
 
 ```go
@@ -516,9 +527,19 @@ grpcurl -plaintext \
 ```
 Usage of crud:
   -dialect string   database dialect: mysql | postgres | sqlite3  (default "mysql")
+  -sqlite string    SQLite driver used when -dialect=sqlite3: ncruces | mattn | modernc  (default "ncruces")
   -protopkg string  Go package name for the generated proto go_package option
   -service          also generate gRPC proto + service skeleton
 ```
+
+When `-dialect=sqlite3`, `-sqlite` selects the xsql driver package imported by the
+generated client:
+
+| `-sqlite` | xsql package | Driver |
+|---|---|---|
+| `ncruces` (default) | `github.com/goflower-io/xsql/sqlite` | `github.com/ncruces/go-sqlite3` (no cgo) |
+| `mattn` | `github.com/goflower-io/xsql/sqlite/mattn` | `github.com/mattn/go-sqlite3` (cgo) |
+| `modernc` | `github.com/goflower-io/xsql/sqlite/modernc` | `modernc.org/sqlite` (pure Go) |
 
 ---
 

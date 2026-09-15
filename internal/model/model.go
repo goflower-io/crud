@@ -14,6 +14,11 @@ type Table struct {
 	RelativePath     string
 	Protopkg         string
 	Dialect          string // mysql postgres sqlite3
+	// SQLiteImportPath is the xsql sqlite driver package to import in the
+	// generated client when Dialect is sqlite3, e.g.
+	// github.com/goflower-io/xsql/sqlite (default) or
+	// github.com/goflower-io/xsql/sqlite/mattn.
+	SQLiteImportPath string
 }
 
 // Column Column

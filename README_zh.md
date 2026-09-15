@@ -306,6 +306,16 @@ if err != nil {
 return tx.Commit()
 ```
 
+### 访问底层 DB
+
+`Client.DB()` 返回内部的 `*xsql.DB`，便于执行自定义 SQL、读写分离或连接池调优：
+
+```go
+db := client.DB()
+db.SetLogger(xsql.SlogLogger(slog.Default())) // 可选 SQL 日志
+row := db.Master().QueryRowContext(ctx, "SELECT ...")
+```
+
 ### 调试日志
 
 ```go
@@ -515,9 +525,18 @@ grpcurl -plaintext \
 ```
 crud 参数说明：
   -dialect string   数据库方言：mysql | postgres | sqlite3  （默认 "mysql"）
+  -sqlite string    当 -dialect=sqlite3 时使用的 SQLite 驱动：ncruces | mattn | modernc（默认 "ncruces"）
   -protopkg string  生成 proto 文件的 go_package 包名
   -service          同时生成 gRPC proto 文件和服务骨架
 ```
+
+当 `-dialect=sqlite3` 时，`-sqlite` 决定生成代码导入的 xsql 驱动包：
+
+| `-sqlite` | xsql 包 | 驱动 |
+|---|---|---|
+| `ncruces`（默认） | `github.com/goflower-io/xsql/sqlite` | `github.com/ncruces/go-sqlite3`（无需 cgo） |
+| `mattn` | `github.com/goflower-io/xsql/sqlite/mattn` | `github.com/mattn/go-sqlite3`（cgo） |
+| `modernc` | `github.com/goflower-io/xsql/sqlite/modernc` | `modernc.org/sqlite`（纯 Go） |
 
 ---
 

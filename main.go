@@ -38,13 +38,14 @@ var clientGenericTmpl []byte
 var genericTmpl []byte
 
 var (
-	database    string
-	path        string
-	service     bool
-	httpHandler bool
-	protopkg    string
-	dialect     string
-	ui          string
+	database     string
+	path         string
+	service      bool
+	httpHandler  bool
+	protopkg     string
+	dialect      string
+	sqliteDriver string
+	ui           string
 )
 
 const defaultDir = "crud"
@@ -70,6 +71,12 @@ func init() {
 		"dialect",
 		"mysql",
 		"-dialect only support mysql postgres sqlite3, default mysql ",
+	)
+	flag.StringVar(
+		&sqliteDriver,
+		"sqlite",
+		"ncruces",
+		"-sqlite  sqlite driver used when -dialect=sqlite3: ncruces | mattn | modernc, default ncruces ",
 	)
 	flag.StringVar(&ui, "ui", "", "-ui daisy  use DaisyUI + TailwindCSS view template")
 }
@@ -124,9 +131,29 @@ func tableFromSqlFile(filePath, db, relative, d string) *model.Table {
 	case "postgres":
 		return model.PostgresTable(db, filePath, relative, d)
 	case "sqlite3":
-		return model.Sqlite3Table(db, filePath, relative, d)
+		t := model.Sqlite3Table(db, filePath, relative, d)
+		if t != nil {
+			t.SQLiteImportPath = sqliteImportPath(sqliteDriver)
+		}
+		return t
 	}
 	return nil
+}
+
+// sqliteImportPath maps the -sqlite flag to the xsql SQLite driver package.
+// ncruces is the default and is exposed by github.com/goflower-io/xsql/sqlite.
+func sqliteImportPath(driver string) string {
+	switch driver {
+	case "", "ncruces":
+		return "github.com/goflower-io/xsql/sqlite"
+	case "mattn":
+		return "github.com/goflower-io/xsql/sqlite/mattn"
+	case "modernc":
+		return "github.com/goflower-io/xsql/sqlite/modernc"
+	default:
+		log.Fatalf("-sqlite only support ncruces mattn modernc, got %q", driver)
+		return ""
+	}
 }
 
 func tableFromSql(path string) (tableObjs []*model.Table, isDir bool) {

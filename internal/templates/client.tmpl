@@ -17,7 +17,7 @@ import (
 
 	 {{if $ismysql}}"github.com/goflower-io/xsql/mysql"{{end}} 
 	 {{if $ispg}}"github.com/goflower-io/xsql/postgres"{{end}} 
-	 {{if $issqlite}}"github.com/goflower-io/xsql/sqlite3"{{end}}
+	 {{if $issqlite}}sqlite "{{(index . 0).SQLiteImportPath}}"{{end}}
 
 )
 	
@@ -75,7 +75,7 @@ func (tx *Tx) init() {
 }
 
 func NewClient(config *xsql.Config,debug bool) (*Client, error) {
-	db, err := {{if $ismysql}}mysql{{end}} {{if $ispg}}postgres{{end}} {{if $issqlite}}sqlite3{{end}}.NewDB(config)
+	db, err := {{if $ismysql}}mysql{{end}} {{if $ispg}}postgres{{end}} {{if $issqlite}}sqlite{{end}}.NewDB(config)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +88,12 @@ func NewClientWithDB(db *xsql.DB,debug bool)*Client{
 	c := &Client{config:db.Config(),db:db,debug:debug}
 	c.init()
 	return c 
+}
+
+// DB exposes the underlying xsql.DB, e.g. for custom SQL, read-write routing,
+// or connection pool tuning.
+func (c *Client) DB() *xsql.DB {
+	return c.db
 }
 
 func (c *Client) Begin(ctx context.Context) (*Tx, error) {
